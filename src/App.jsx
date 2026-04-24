@@ -24,7 +24,9 @@ const CATS=[
   {id:"limpieza",label:"Limpieza",emoji:"🧹",color:"#2E7D32"},
   {id:"otros",label:"Otros",emoji:"📦",color:"#546E7A"},
 ];
-const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres"];
+const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres","Apolo"];
+// Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
+const APOLO_REQUIERE_APROBACION=true;
 const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Otro"];
 
 const todayISO=()=>new Date().toISOString().slice(0,10);
@@ -213,6 +215,7 @@ export default function App(){
     const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+(v?.efectivo||0);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
+    const requiereAprobacion=rForm.quien==="Apolo";
     const payload={
       fecha_recoleccion:rForm.fecha_recoleccion,
       fechas_cubiertas:rForm.selDias,
@@ -222,6 +225,8 @@ export default function App(){
       quien:rForm.quien,
       quien_faltante:faltante>0?(rForm.quien_faltante||rForm.quien):null,
       nota:rForm.nota,
+      aprobada:requiereAprobacion?false:true,
+      aprobada_por:requiereAprobacion?null:"auto",
     };
     const{error:e}=await sb.from("recolecciones").insert([payload]);
     if(e){setError("Error: "+e.message);return;}
@@ -278,6 +283,7 @@ export default function App(){
   const todayTG=todayG.reduce((s,g)=>s+g.monto,0);
   const todayV=ventas.find(v=>v.fecha===todayISO());
   const creditosPendientes=gastos.filter(g=>g.tipo_pago==="credito"&&!g.pagado);
+  const recoleccionesPendientesAprobacion=recolecciones.filter(r=>r.quien==="Apolo"&&r.aprobada===false);
   const vencidos=creditosPendientes.filter(g=>g.fecha_vencimiento&&g.fecha_vencimiento<todayISO());
 
   if(loading)return(
@@ -299,11 +305,13 @@ export default function App(){
       <div style={{width:"100%",maxWidth:320,display:"flex",flexDirection:"column",gap:12}}>
         {EQUIPO.map(nombre=>(
           <button key={nombre} onClick={()=>{localStorage.setItem("lf_usuario",nombre);setUsuarioActual(nombre);}}
-            style={{width:"100%",padding:"16px 0",borderRadius:16,border:"2px solid rgba(255,255,255,0.3)",
-              background:"rgba(255,255,255,0.15)",color:BLANCO,fontSize:17,fontWeight:800,
+            style={{width:"100%",padding:"16px 0",borderRadius:16,
+              border:nombre==="Apolo"?"2px solid #FFD700":"2px solid rgba(255,255,255,0.3)",
+              background:nombre==="Apolo"?"rgba(255,215,0,0.2)":"rgba(255,255,255,0.15)",
+              color:BLANCO,fontSize:17,fontWeight:800,
               cursor:"pointer",fontFamily:"inherit",backdropFilter:"blur(8px)",
               letterSpacing:0.3}}>
-            {nombre}
+            {nombre==="Apolo"?"🧑 ":""}{nombre}{nombre==="Apolo"?" (Recolector)":""}
           </button>
         ))}
       </div>
@@ -629,26 +637,30 @@ export default function App(){
               </div>
             );
           })()}
-          {recolecciones.map(r=>(
+          {recolecciones.map(r=>{
+            const pendAprobacion=r.quien==="Apolo"&&r.aprobada===false;
+            return(
             <button key={r.id} onClick={()=>{setSelRec(r);setView("detalle-recoleccion");}}
               style={{...S.card,display:"flex",alignItems:"center",gap:12,width:"100%",
-                border:r.faltante>0?"1.5px solid #EF9A9A":"1.5px solid transparent",
+                border:pendAprobacion?"2px solid #FFD700":r.faltante>0?"1.5px solid #EF9A9A":"1.5px solid transparent",
+                background:pendAprobacion?"#FFFDE7":BLANCO,
                 cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
-              <div style={{...S.catEmoji,background:r.faltante>0?"#FFEBEE":VERDE_BG,color:r.faltante>0?"#E53935":VERDE}}>
-                {r.faltante>0?"⚠️":"💰"}
+              <div style={{...S.catEmoji,background:pendAprobacion?"#FFF8E1":r.faltante>0?"#FFEBEE":VERDE_BG,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE}}>
+                {pendAprobacion?"⏳":r.faltante>0?"⚠️":"💰"}
               </div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:14}}>{r.fecha_recoleccion}</div>
                 <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>{r.quien||"—"} · {(r.fechas_cubiertas||[]).length} días</div>
+                {pendAprobacion&&<div style={{fontSize:11,color:"#E65100",fontWeight:700,marginTop:2}}>⏳ Pendiente aprobación de José Luis</div>}
                 {r.faltante>0&&<div style={{fontSize:11,color:"#E53935",fontWeight:700,marginTop:2}}>🔴 Faltante: {fmtMXN(r.faltante)}{r.quien_faltante?` · ${r.quien_faltante}`:""}</div>}
                 {r.nota&&<div style={{fontSize:11,color:"#C0C0C0",fontStyle:"italic",marginTop:2}}>{r.nota}</div>}
               </div>
               <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <div style={{fontWeight:900,color:r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(r.monto_fisico??r.monto_total)}</div>
+                <div style={{fontWeight:900,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(r.monto_fisico??r.monto_total)}</div>
                 <span style={{color:"#CCC",fontSize:18}}>›</span>
               </div>
             </button>
-          ))}
+          );})}
         </>
       )}
     </Screen>
@@ -682,6 +694,32 @@ export default function App(){
               {r.quien_faltante?`${r.quien_faltante} debe entregar este monto en el siguiente corte.`:"Asigna a quién corresponde el faltante editando esta recolección."}
             </div>
           </div>
+        )}
+
+        {/* BANNER DE APROBACIÓN */}
+        {r.quien==="Apolo"&&(
+          r.aprobada===false
+            ?<div style={{background:"#FFF8E1",borderRadius:14,padding:"14px 16px",marginBottom:12,border:"2px solid #FFD700"}}>
+               <div style={{fontSize:13,fontWeight:800,color:"#E65100",marginBottom:4}}>⏳ Pendiente de aprobación</div>
+               <div style={{fontSize:12,color:"#795548",marginBottom:usuarioActual==="José Luis"?10:0}}>
+                 Esta recolección de <strong>Apolo</strong> requiere que <strong>José Luis</strong> la apruebe.
+               </div>
+               {usuarioActual==="José Luis"&&(
+                 <button onClick={async()=>{
+                   await sb.from("recolecciones").update({aprobada:true,aprobada_por:"José Luis",nota:(r.nota||"")+(r.nota?"
+":"")+"✅ Aprobada por José Luis el "+todayISO()}).eq("id",r.id);
+                   await fetchR();
+                   const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});
+                   if(data){setRecolecciones(data);const upd=data.find(x=>x.id===r.id);if(upd)setSelRec(upd);}
+                 }}
+                   style={{width:"100%",padding:"12px 0",background:"#2E7D32",color:"#FFF",border:"none",borderRadius:12,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+                   ✅ Aprobar esta recolección
+                 </button>
+               )}
+             </div>
+            :<div style={{background:"#E8F5E9",borderRadius:14,padding:"12px 16px",marginBottom:12,border:"1.5px solid #A5D6A7"}}>
+               <div style={{fontSize:13,fontWeight:800,color:"#2E7D32"}}>✅ Aprobada por {r.aprobada_por||"sistema"}</div>
+             </div>
         )}
 
         {!editRecForm?(
@@ -1371,6 +1409,12 @@ export default function App(){
             <button onClick={()=>setView("creditos")}
               style={{background:vencidos.length>0?"#FFEBEE":AMBAR_BG,border:`1px solid ${vencidos.length>0?"#EF9A9A":"#FFE082"}`,borderRadius:10,padding:"5px 10px",fontSize:12,fontWeight:700,color:vencidos.length>0?"#E53935":AMBAR,cursor:"pointer"}}>
               ⏳ {creditosPendientes.length}
+            </button>
+          )}
+          {usuarioActual==="José Luis"&&recoleccionesPendientesAprobacion.length>0&&(
+            <button onClick={()=>setView("recoleccion")}
+              style={{background:"#FFF8E1",border:"2px solid #FFD700",borderRadius:10,padding:"5px 10px",fontSize:12,fontWeight:700,color:"#E65100",cursor:"pointer",animation:"pulse 1.5s infinite"}}>
+              🔔 {recoleccionesPendientesAprobacion.length} por aprobar
             </button>
           )}
           <button onClick={()=>{localStorage.removeItem("lf_usuario");setUsuarioActual(null);}}
