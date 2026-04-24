@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
@@ -767,8 +768,7 @@ export default function App(){
                </div>
                {usuarioActual==="José Luis"&&(
                  <button onClick={async()=>{
-                   await sb.from("recolecciones").update({aprobada:true,aprobada_por:"José Luis",nota:(r.nota||"")+(r.nota?"
-":"")+"✅ Aprobada por José Luis el "+todayISO()}).eq("id",r.id);
+                   await sb.from("recolecciones").update({aprobada:true,aprobada_por:"José Luis",nota:(r.nota||"")+(r.nota?"\n":"")+"✅ Aprobada por José Luis el "+todayISO()}).eq("id",r.id);
                    await fetchR();
                    const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});
                    if(data){setRecolecciones(data);const upd=data.find(x=>x.id===r.id);if(upd)setSelRec(upd);}
