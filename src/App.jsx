@@ -110,6 +110,13 @@ export default function App(){
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
 
+  // Auto-seleccionar quien=Apolo cuando Apolo abre el form de recolección
+  useEffect(()=>{
+    if(view==="recoleccion"&&usuarioActual==="Apolo"){
+      setRForm(f=>f.quien==="Apolo"?f:{...f,quien:"Apolo"});
+    }
+  },[view,usuarioActual]);
+
   useEffect(()=>{
     (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
@@ -564,10 +571,6 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: RECOLECCIÓN
   // ══════════════════════════════════════════════════════════════════════════
-  // Auto-seleccionar Apolo en el form si es él quien está logueado
-  if(view==="recoleccion"&&usuarioActual==="Apolo"&&rForm.quien!=="Apolo"){
-    setRForm(f=>({...f,quien:"Apolo"}));
-  }
   if(view==="recoleccion")return(
     <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
       <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:18,padding:"20px",color:BLANCO,marginBottom:20,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
