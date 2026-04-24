@@ -227,6 +227,8 @@ export default function App(){
     const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+(v?.efectivo||0);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
+    // Si Apolo está logueado, forzar quien=Apolo independientemente del form
+    if(usuarioActual==="Apolo") rForm={...rForm,quien:"Apolo"};
     const requiereAprobacion=rForm.quien==="Apolo";
     const payload={
       fecha_recoleccion:rForm.fecha_recoleccion,
@@ -594,7 +596,13 @@ export default function App(){
           <FL>Fecha de recolección</FL>
           <input type="date" style={S.input} value={rForm.fecha_recoleccion} onChange={e=>setRForm(f=>({...f,fecha_recoleccion:e.target.value}))}/>
           <FL>¿Quién recolecta? *</FL>
-          <div style={S.chipRow}>{["José Luis","Jefeson","Apolo"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+          {usuarioActual==="Apolo"
+            ?<div style={{background:"#FFF8E1",borderRadius:12,padding:"12px 14px",border:"2px solid #FFD700",marginBottom:4}}>
+               <div style={{fontSize:13,fontWeight:800,color:"#E65100"}}>🧑 Apolo</div>
+               <div style={{fontSize:11,color:"#795548",marginTop:2}}>Recolección pendiente de aprobación por José Luis</div>
+             </div>
+            :<div style={S.chipRow}>{["José Luis","Jefeson","Apolo"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+          }
 
           {/* ── MONTO FÍSICO ── */}
           {(()=>{
