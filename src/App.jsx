@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
@@ -289,7 +288,7 @@ export default function App(){
   const todayTG=todayG.reduce((s,g)=>s+g.monto,0);
   const todayV=ventas.find(v=>v.fecha===todayISO());
   const creditosPendientes=gastos.filter(g=>g.tipo_pago==="credito"&&!g.pagado);
-  const recoleccionesPendientesAprobacion=recolecciones.filter(r=>r.quien==="Apolo"&&r.aprobada===false);
+  const recoleccionesPendientesAprobacion=recolecciones.filter(r=>r.quien==="Apolo"&&!r.aprobada);
   const vencidos=creditosPendientes.filter(g=>g.fecha_vencimiento&&g.fecha_vencimiento<todayISO());
 
   if(loading)return(
@@ -565,6 +564,10 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: RECOLECCIÓN
   // ══════════════════════════════════════════════════════════════════════════
+  // Auto-seleccionar Apolo en el form si es él quien está logueado
+  if(view==="recoleccion"&&usuarioActual==="Apolo"&&rForm.quien!=="Apolo"){
+    setRForm(f=>({...f,quien:"Apolo"}));
+  }
   if(view==="recoleccion")return(
     <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
       <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:18,padding:"20px",color:BLANCO,marginBottom:20,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
@@ -588,7 +591,7 @@ export default function App(){
           <FL>Fecha de recolección</FL>
           <input type="date" style={S.input} value={rForm.fecha_recoleccion} onChange={e=>setRForm(f=>({...f,fecha_recoleccion:e.target.value}))}/>
           <FL>¿Quién recolecta? *</FL>
-          <div style={S.chipRow}>{["José Luis","Jefeson"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+          <div style={S.chipRow}>{["José Luis","Jefeson","Apolo"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
 
           {/* ── MONTO FÍSICO ── */}
           {(()=>{
@@ -700,7 +703,7 @@ export default function App(){
             );
           })()}
           {recolecciones.map(r=>{
-            const pendAprobacion=r.quien==="Apolo"&&r.aprobada===false;
+            const pendAprobacion=r.quien==="Apolo"&&!r.aprobada;
             return(
             <button key={r.id} onClick={()=>{setSelRec(r);setView("detalle-recoleccion");}}
               style={{...S.card,display:"flex",alignItems:"center",gap:12,width:"100%",
@@ -760,7 +763,7 @@ export default function App(){
 
         {/* BANNER DE APROBACIÓN */}
         {r.quien==="Apolo"&&(
-          r.aprobada===false
+          !r.aprobada
             ?<div style={{background:"#FFF8E1",borderRadius:14,padding:"14px 16px",marginBottom:12,border:"2px solid #FFD700"}}>
                <div style={{fontSize:13,fontWeight:800,color:"#E65100",marginBottom:4}}>⏳ Pendiente de aprobación</div>
                <div style={{fontSize:12,color:"#795548",marginBottom:usuarioActual==="José Luis"?10:0}}>
