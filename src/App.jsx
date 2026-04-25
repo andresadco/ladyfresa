@@ -223,21 +223,21 @@ export default function App(){
 
   // ── RECOLECCIONES ─────────────────────────────────────────────────────────
   const saveRecoleccion=async()=>{
-    if(!rForm.selDias.length||!rForm.quien)return;
+    // Forzar quien=usuarioActual si es Apolo (no toca chips)
+    const quienFinal=usuarioActual==="Apolo"?"Apolo":rForm.quien;
+    if(!rForm.selDias.length||!quienFinal)return;
     const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+(v?.efectivo||0);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
-    // Si Apolo está logueado, forzar quien=Apolo independientemente del form
-    if(usuarioActual==="Apolo") rForm={...rForm,quien:"Apolo"};
-    const requiereAprobacion=rForm.quien==="Apolo";
+    const requiereAprobacion=quienFinal==="Apolo";
     const payload={
       fecha_recoleccion:rForm.fecha_recoleccion,
       fechas_cubiertas:rForm.selDias,
       monto_total:montoTotal,
       monto_fisico:montoFisico,
       faltante:faltante||null,
-      quien:rForm.quien,
-      quien_faltante:faltante>0?(rForm.quien_faltante||rForm.quien):null,
+      quien:quienFinal,
+      quien_faltante:faltante>0?(rForm.quien_faltante||quienFinal):null,
       nota:rForm.nota,
       aprobada:requiereAprobacion?false:true,
       aprobada_por:requiereAprobacion?null:"auto",
@@ -797,7 +797,7 @@ export default function App(){
              </div>
         )}
 
-        {!editRecForm?(
+        {!editRecForm&&(usuarioActual==="José Luis"||usuarioActual==="Andres")?(
           <div style={{display:"flex",gap:8,marginBottom:16}}>
             <button onClick={()=>setEditRecForm({quien:r.quien,nota:r.nota||"",fecha_recoleccion:r.fecha_recoleccion,quien_faltante:r.quien_faltante||""})}
               style={{flex:1,...S.actionBtn,color:AZUL,borderColor:AZUL,background:AZUL_BG}}>✏️ Editar</button>
@@ -906,7 +906,7 @@ export default function App(){
         {gastosDia.length>0&&(
           <>
             <ST>Gastos del mismo día · {fmtMXN(totalGDia)}</ST>
-            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||g.quien===usuarioActual}/>)}
+            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
           </>
         )}
       </Screen>
@@ -1111,7 +1111,7 @@ export default function App(){
         })}
 
         <ST>Registros {filtroQ!=="todos"?`· ${filtroQ}`:""}</ST>
-        {lista.length===0?<Empty>Sin gastos</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||g.quien===usuarioActual}/>)}
+        {lista.length===0?<Empty>Sin gastos</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
       </Screen>
     );
   }
@@ -1283,7 +1283,7 @@ export default function App(){
           );
         })}
         <ST>Todos los gastos</ST>
-        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||g.quien===usuarioActual}/>)}
+        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
       </Screen>
     );
   }
@@ -1545,7 +1545,7 @@ export default function App(){
       {todayG.length>0&&(
         <div style={{padding:"0 16px"}}>
           <ST>Hoy</ST>
-          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||g.quien===usuarioActual} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)}/>)}
+          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)}/>)}
         </div>
       )}
 
@@ -1554,7 +1554,7 @@ export default function App(){
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📈" label="Dashboard" onClick={()=>setView("dashboard")}/>}
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📉" label="Tendencias" onClick={()=>setView("analitica")}/>}
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📅" label="Historial" onClick={()=>setView("historial")}/>}
-        {!PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="💰" label="Recolectar" onClick={()=>setView("recoleccion")}/>}
+        <NavBtn icon="💰" label="Recolectar" onClick={()=>setView("recoleccion")}/>
       </nav>
     </div>
   );
