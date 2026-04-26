@@ -1250,6 +1250,7 @@ export default function App(){
       ))}
     </Screen>
   );
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: DETALLE MES
@@ -1557,7 +1558,7 @@ export default function App(){
       </nav>
     </div>
   );
-}}
+}
 
 // ── SUBCOMPONENTES ────────────────────────────────────────────────────────────
 function Screen({title,onBack,action,children}){
