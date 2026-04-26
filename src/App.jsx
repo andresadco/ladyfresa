@@ -1291,7 +1291,6 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: ANALÍTICA / TENDENCIAS
   // ══════════════════════════════════════════════════════════════════════════
-  }
   if(view==="analitica"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;}
     // Últimos 6 meses
     const ultimos6=[];
@@ -1558,7 +1557,7 @@ export default function App(){
       </nav>
     </div>
   );
-}
+}}
 
 // ── SUBCOMPONENTES ────────────────────────────────────────────────────────────
 function Screen({title,onBack,action,children}){
