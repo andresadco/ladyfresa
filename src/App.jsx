@@ -43,6 +43,8 @@ const monthLabel=(k)=>{
 const addDays=(iso,n)=>{const d=new Date(iso);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
 const lsLoad=(k)=>{try{return JSON.parse(localStorage.getItem(k)||"[]");}catch{return[];}};
 const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
+// Normaliza texto: sin acentos, minúsculas, sin espacios extras
+const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
 const exportExcel=(gastos,ventas,recolecciones,mk)=>{
@@ -93,6 +95,7 @@ export default function App(){
   const[resDesde,setResDesde]=useState("");
   const[resHasta,setResHasta]=useState("");
   const[resFiltrosOpen,setResFiltrosOpen]=useState(false);
+  const[showMonthPicker,setShowMonthPicker]=useState(false);
   const[error,setError]=useState(null);
   const[pinUsuario,setPinUsuario]=useState(null); // usuario pendiente de PIN
   const[pinInput,setPinInput]=useState("");
@@ -1035,7 +1038,7 @@ export default function App(){
     const listaCompleta=gMes(mk).filter(g=>{
       if(filtroQ!=="todos"&&g.quien!==filtroQ)return false;
       if(resCat!=="todos"&&g.cat!==resCat)return false;
-      if(resBuscar&&!(g.concepto||"").toLowerCase().includes(resBuscar.toLowerCase()))return false;
+      if(resBuscar&&!norm(g.concepto).includes(norm(resBuscar)))return false;
       if(resDesde&&g.fecha<resDesde)return false;
       if(resHasta&&g.fecha>resHasta)return false;
       return true;
@@ -1075,30 +1078,125 @@ export default function App(){
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
         action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk)}/>}>
 
-        {/* SELECTOR DE MES */}
-        <ST>📅 Mes</ST>
-        <div style={{...S.chipRow,marginBottom:8,overflowX:"auto",flexWrap:"nowrap",paddingBottom:4}}>
-          {months.slice(0,12).map(m=>(
-            <Chip key={m} active={mk===m} color={ROSA} onClick={()=>setResMK(m===currentMK?null:m)}>{monthLabel(m)}</Chip>
+        {/* ═══ HERO: BALANCE GRANDE ═══ */}
+        <div style={{background:`linear-gradient(135deg, ${ROSA} 0%, #C2185B 100%)`,borderRadius:18,padding:"18px 18px 16px",marginBottom:14,color:BLANCO,boxShadow:"0 8px 24px rgba(232,23,93,0.25)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            <div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.75)",fontWeight:700,textTransform:"uppercase",letterSpacing:0.8}}>Balance del mes</div>
+              <div style={{fontSize:32,fontWeight:900,letterSpacing:-1,marginTop:2,color:totalVentasMes-tg>=0?"#A5F3A5":"#FFC1C1"}}>
+                {totalVentasMes-tg>=0?"+":""}{fmtMXN(totalVentasMes-tg)}
+              </div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginTop:2}}>Ventas − Gastos</div>
+            </div>
+            <button onClick={()=>{setShowMonthPicker(true);}}
+              style={{background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:10,padding:"6px 12px",color:BLANCO,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              📅 {monthLabel(mk)} ▼
+            </button>
+          </div>
+          <div style={{display:"flex",gap:6,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.15)"}}>
+            <div style={{flex:1,textAlign:"center"}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>VENTAS</div>
+              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(totalVentasMes)}</div>
+            </div>
+            <div style={{width:1,background:"rgba(255,255,255,0.15)"}}/>
+            <div style={{flex:1,textAlign:"center"}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>GASTOS</div>
+              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(tg)}</div>
+            </div>
+            <div style={{width:1,background:"rgba(255,255,255,0.15)"}}/>
+            <div style={{flex:1,textAlign:"center"}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>RECOLECT</div>
+              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(totalRecolectadoMes)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══ MODAL SELECTOR DE MES ═══ */}
+        {showMonthPicker&&(
+          <div onClick={()=>setShowMonthPicker(false)}
+            style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div onClick={e=>e.stopPropagation()}
+              style={{background:BLANCO,borderRadius:20,padding:"20px",width:"100%",maxWidth:340,maxHeight:"70vh",overflowY:"auto"}}>
+              <div style={{fontSize:16,fontWeight:900,color:GRIS_DARK,marginBottom:14}}>📅 Selecciona el mes</div>
+              {months.map(m=>{
+                const tgM=totG(m);
+                return(
+                  <button key={m} onClick={()=>{setResMK(m===currentMK?null:m);setShowMonthPicker(false);}}
+                    style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",padding:"12px 14px",borderRadius:12,border:mk===m?`2px solid ${ROSA}`:"1.5px solid #EEE",background:mk===m?ROSA_BG:BLANCO,marginBottom:8,cursor:"pointer",fontFamily:"inherit"}}>
+                    <span style={{fontWeight:800,fontSize:14,color:mk===m?ROSA:GRIS_DARK}}>{monthLabel(m)}</span>
+                    <span style={{fontSize:12,color:GRIS_TEXT,fontWeight:700}}>{fmtMXN(tgM)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ ALERTAS RÁPIDAS ═══ */}
+        {totCred>0&&<button onClick={()=>setView("creditos")} style={{...S.alertaBanner,marginBottom:8,width:"100%",border:`1px solid ${AMBAR}`,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+          ⏳ <strong>{fmtMXN(totCred)}</strong> en créditos pendientes →
+        </button>}
+        {pendienteMes>0&&<div style={{...S.alertaBanner,background:VERDE_BG,color:VERDE,border:`1px solid ${VERDE}`,marginBottom:8}}>
+          💵 <strong>{fmtMXN(pendienteMes)}</strong> de efectivo sin recolectar ({diasMesPendientes.length} días)
+        </div>}
+        {faltantesMes>0&&<div style={{...S.alertaBanner,background:"#FFEBEE",color:"#E53935",border:"1px solid #EF9A9A",marginBottom:8}}>
+          🔴 <strong>{fmtMXN(faltantesMes)}</strong> en faltantes este mes
+        </div>}
+
+        {/* ═══ FILTRO POR CATEGORÍA: chips visuales ═══ */}
+        <ST>🏷️ Filtrar por categoría</ST>
+        <div style={{...S.chipRow,marginBottom:14,overflowX:"auto",flexWrap:"nowrap",paddingBottom:4}}>
+          <Chip active={resCat==="todos"} color={GRIS_MED} onClick={()=>setResCat("todos")}>Todas</Chip>
+          {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>(
+            <Chip key={c.id} active={resCat===c.id} color={c.color} onClick={()=>setResCat(resCat===c.id?"todos":c.id)}>
+              {c.emoji} {c.label} · {fmtMXN(cats[c.id])}
+            </Chip>
           ))}
         </div>
 
-        {/* FILTROS AVANZADOS */}
+        {/* ═══ FILTRO POR PERSONA: chips ═══ */}
+        <ST>👥 Filtrar por persona</ST>
+        <div style={{...S.chipRow,marginBottom:14}}>
+          <Chip active={filtroQ==="todos"} color={GRIS_MED} onClick={()=>setFiltroQ("todos")}>Todos</Chip>
+          {Object.entries(quien).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
+            <Chip key={nombre} active={filtroQ===nombre} color={ROSA} onClick={()=>setFiltroQ(filtroQ===nombre?"todos":nombre)}>
+              {nombre} · {fmtMXN(monto)}
+            </Chip>
+          ))}
+        </div>
+
+        {/* ═══ FILTRO POR PROVEEDOR: chips de los existentes + búsqueda inteligente ═══ */}
+        {topProv.length>0&&(
+          <>
+            <ST>🏪 Filtrar por proveedor / concepto</ST>
+            <div style={{position:"relative",marginBottom:8}}>
+              <input value={resBuscar} onChange={e=>setResBuscar(e.target.value)}
+                placeholder="🔍 Buscar... (ignora acentos)"
+                style={{...S.input,paddingRight:resBuscar?40:14}}/>
+              {resBuscar&&(
+                <button onClick={()=>setResBuscar("")}
+                  style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",fontSize:18,color:GRIS_MED,cursor:"pointer"}}>×</button>
+              )}
+            </div>
+            <div style={{...S.chipRow,marginBottom:14,maxHeight:120,overflowY:"auto"}}>
+              {topProv.map(([nombre,monto])=>(
+                <Chip key={nombre} active={norm(resBuscar)===norm(nombre)} color={ROSA}
+                  onClick={()=>setResBuscar(norm(resBuscar)===norm(nombre)?"":nombre)}>
+                  {nombre} · {fmtMXN(monto)}
+                </Chip>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ═══ FILTRO POR FECHAS (colapsable, opcional) ═══ */}
         <button onClick={()=>setResFiltrosOpen(!resFiltrosOpen)}
-          style={{width:"100%",marginBottom:resFiltrosOpen?0:12,background:GRIS_LIGHT,border:"none",borderRadius:resFiltrosOpen?"12px 12px 0 0":12,padding:"12px 14px",fontSize:12,fontWeight:800,color:GRIS_MED,cursor:"pointer",fontFamily:"inherit",textTransform:"uppercase",letterSpacing:0.6,textAlign:"left"}}>
-          🔎 Filtros avanzados {resFiltrosOpen?"▲":"▼"}
-          {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&<span style={{marginLeft:8,fontSize:10,color:ROSA}}>● activos</span>}
+          style={{width:"100%",marginBottom:resFiltrosOpen?0:14,background:GRIS_LIGHT,border:"none",borderRadius:resFiltrosOpen?"12px 12px 0 0":12,padding:"10px 14px",fontSize:11,fontWeight:800,color:GRIS_MED,cursor:"pointer",fontFamily:"inherit",textTransform:"uppercase",letterSpacing:0.6,textAlign:"left"}}>
+          📅 Rango de fechas {resFiltrosOpen?"▲":"▼"}
+          {(resDesde||resHasta)&&<span style={{marginLeft:8,fontSize:10,color:ROSA}}>● activo</span>}
         </button>
         {resFiltrosOpen&&(
-          <div style={{marginBottom:12,background:GRIS_LIGHT,borderRadius:"0 0 12px 12px",padding:"4px 14px 14px"}}>
-          <div style={{marginTop:10}}>
-            <FL>Buscar concepto / proveedor</FL>
-            <input value={resBuscar} onChange={e=>setResBuscar(e.target.value)} placeholder="Ej: Walmart, gasolina..." style={S.input}/>
-            <FL>Categoría</FL>
-            <div style={S.chipRow}>
-              <Chip active={resCat==="todos"} color={ROSA} onClick={()=>setResCat("todos")}>Todas</Chip>
-              {CATS.map(c=><Chip key={c.id} active={resCat===c.id} color={c.color} onClick={()=>setResCat(c.id)}>{c.emoji} {c.label}</Chip>)}
-            </div>
+          <div style={{marginBottom:14,background:GRIS_LIGHT,borderRadius:"0 0 12px 12px",padding:"4px 14px 14px"}}>
             <div style={{display:"flex",gap:8,marginTop:8}}>
               <div style={{flex:1}}>
                 <FL>Desde</FL>
@@ -1109,107 +1207,31 @@ export default function App(){
                 <input type="date" value={resHasta} onChange={e=>setResHasta(e.target.value)} style={S.input}/>
               </div>
             </div>
-            {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&(
-              <button onClick={()=>{setResCat("todos");setResBuscar("");setResDesde("");setResHasta("");}}
-                style={{marginTop:10,padding:"8px 14px",borderRadius:8,border:"1px solid #DDD",background:BLANCO,fontSize:12,fontWeight:700,color:GRIS_MED,cursor:"pointer",fontFamily:"inherit"}}>
-                ✕ Limpiar filtros
-              </button>
-            )}
-          </div>
           </div>
         )}
 
-        <ST>📊 Dashboard del mes</ST>
-        <div style={{display:"flex",gap:8,marginBottom:8}}>
-          <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${VERDE}`}}>
-            <div style={{fontSize:10,color:VERDE,fontWeight:800,marginBottom:4}}>💵 VENTAS</div>
-            <div style={{fontSize:20,fontWeight:900,color:VERDE}}>{fmtMXN(totalVentasMes)}</div>
-            <div style={{fontSize:10,color:GRIS_TEXT}}>{diasConV} días reg.</div>
-          </div>
-          <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${ROSA}`}}>
-            <div style={{fontSize:10,color:ROSA,fontWeight:800,marginBottom:4}}>🛒 GASTOS</div>
-            <div style={{fontSize:20,fontWeight:900,color:ROSA}}>{fmtMXN(tg)}</div>
-            <div style={{fontSize:10,color:GRIS_TEXT}}>{gMes(mk).length} registros</div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
-          <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${AZUL}`}}>
-            <div style={{fontSize:10,color:AZUL,fontWeight:800,marginBottom:4}}>✅ RECOLECTADO</div>
-            <div style={{fontSize:20,fontWeight:900,color:AZUL}}>{fmtMXN(totalRecolectadoMes)}</div>
-            <div style={{fontSize:10,color:GRIS_TEXT}}>{recoleccionesMes.length} recolecciones</div>
-          </div>
-          <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${AMBAR}`}}>
-            <div style={{fontSize:10,color:AMBAR,fontWeight:800,marginBottom:4}}>⏳ PENDIENTE</div>
-            <div style={{fontSize:20,fontWeight:900,color:AMBAR}}>{fmtMXN(pendienteMes)}</div>
-            <div style={{fontSize:10,color:GRIS_TEXT}}>{diasMesPendientes.length} días</div>
-          </div>
-        </div>
-
-        {totCred>0&&<div style={{...S.alertaBanner,marginBottom:12,cursor:"pointer"}} onClick={()=>setView("creditos")}>
-          ⏳ Créditos pendientes: <strong>{fmtMXN(totCred)}</strong> — toca para ver →
-        </div>}
-        {diasConV<diasDelMes/2&&<div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:12}}>
-          📅 Solo {diasConV} de {diasDelMes} días con venta registrada
-        </div>}
-
-        {ventasMes.filter(v=>v.nota).length>0&&(
-          <>{<ST>📝 Notas de ventas</ST>}
-          {ventasMes.filter(v=>v.nota).slice(0,3).map(v=>(
-            <div key={v.id} style={{background:BLANCO,borderRadius:12,padding:"10px 14px",marginBottom:8,boxShadow:"0 2px 6px rgba(0,0,0,0.04)",borderLeft:`3px solid ${VERDE}`}}>
-              <div style={{fontSize:11,color:GRIS_TEXT,marginBottom:3}}>{v.fecha} · {v.quien||"—"} · {fmtMXN(v.efectivo)}</div>
-              <div style={{fontSize:13,color:GRIS_DARK,fontStyle:"italic"}}>{v.nota}</div>
+        {/* ═══ INDICADOR FILTROS ACTIVOS ═══ */}
+        {(resCat!=="todos"||filtroQ!=="todos"||resBuscar||resDesde||resHasta)&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:ROSA_BG,padding:"10px 14px",borderRadius:12,marginBottom:14,border:`1px solid ${ROSA}33`}}>
+            <div style={{fontSize:12,color:ROSA,fontWeight:800}}>
+              📊 Mostrando {lista.length} de {gMes(mk).length} gastos · Total: <strong>{fmtMXN(tg)}</strong>
             </div>
-          ))}</>
+            <button onClick={()=>{setResCat("todos");setFiltroQ("todos");setResBuscar("");setResDesde("");setResHasta("");}}
+              style={{background:"none",border:"none",color:ROSA,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              ✕ Limpiar
+            </button>
+          </div>
         )}
 
-        <ST>Filtrar por persona</ST>
-        <div style={{...S.chipRow,marginBottom:16}}>
-          {["todos",...EQUIPO].map(o=><Chip key={o} active={filtroQ===o} color={ROSA} onClick={()=>setFiltroQ(o)}>{o==="todos"?"Todos":o}</Chip>)}
-        </div>
-
-        {filtroQ==="todos"&&Object.keys(quien).length>0&&(
-          <>{<ST>Gasto por persona</ST>}
-          {Object.entries(quien).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
-            <div key={nombre} style={S.personaRow}>
-              <div style={S.personaAvatar}>{nombre.charAt(0)}</div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:14}}>{nombre}</div>
-                <div style={{height:4,background:"#F0F0F0",borderRadius:2,marginTop:5,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${tg?Math.round((monto/tg)*100):0}%`,background:ROSA,borderRadius:2}}/>
-                </div>
-              </div>
-              <div style={{fontWeight:800,color:ROSA,fontSize:15,marginLeft:12}}>{fmtMXN(monto)}</div>
-            </div>
-          ))}</>
-        )}
-
-        <ST>Por categoría</ST>
-        {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>{
-          const pct=tg?Math.round((cats[c.id]/tg)*100):0;
-          return(
-            <div key={c.id} style={S.catRow}>
-              <div style={{...S.catEmoji,background:c.color+"22",color:c.color}}>{c.emoji}</div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13}}>{c.label}</div>
-                <div style={{height:4,background:"#F0F0F0",borderRadius:2,marginTop:5,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${pct}%`,background:c.color,borderRadius:2}}/>
-                </div>
-                <div style={{fontSize:10,color:GRIS_TEXT,marginTop:2}}>{pct}%</div>
-              </div>
-              <div style={{fontWeight:800,color:c.color,fontSize:14,marginLeft:12}}>{fmtMXN(cats[c.id])}</div>
-            </div>
-          );
-        })}
-
-        {/* Detalle de recolecciones del mes */}
+        {/* ═══ RECOLECCIONES DEL MES ═══ */}
         {recoleccionesMes.length>0&&(
           <>
             <ST>💰 Recolecciones de {monthLabel(mk)}</ST>
             <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
               <div style={{display:"flex",justifyContent:"space-between",paddingBottom:10,marginBottom:10,borderBottom:"1px solid #F0F0F0"}}>
                 <div>
-                  <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:700,marginBottom:2}}>RECOLECTADO EN EFECTIVO</div>
-                  <div style={{fontSize:22,fontWeight:900,color:VERDE}}>{fmtMXN(totalRecolectadoMes)}</div>
+                  <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:700,marginBottom:2}}>EFECTIVO RECOLECTADO</div>
+                  <div style={{fontSize:24,fontWeight:900,color:VERDE}}>{fmtMXN(totalRecolectadoMes)}</div>
                 </div>
                 {faltantesMes>0&&(
                   <div style={{textAlign:"right"}}>
@@ -1218,45 +1240,43 @@ export default function App(){
                   </div>
                 )}
               </div>
-              {/* Por persona */}
-              {Object.entries(recoPorPersona).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
-                <div key={nombre} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
-                  <span style={{color:GRIS_DARK,fontWeight:600}}>{nombre==="Apolo"?"🧑 ":""}{nombre}</span>
-                  <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(monto)}</span>
-                </div>
-              ))}
-              <div style={{fontSize:11,color:GRIS_TEXT,marginTop:8,paddingTop:8,borderTop:"1px solid #F0F0F0"}}>
-                {recoleccionesMes.length} recolección{recoleccionesMes.length!==1?"es":""} este mes
+              {Object.entries(recoPorPersona).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>{
+                const pct=totalRecolectadoMes?Math.round((monto/totalRecolectadoMes)*100):0;
+                return(
+                  <div key={nombre} style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}}>
+                      <span style={{color:GRIS_DARK,fontWeight:700}}>{nombre==="Apolo"?"🧑 ":""}{nombre}</span>
+                      <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(monto)}</span>
+                    </div>
+                    <div style={{height:4,background:"#F0F0F0",borderRadius:2,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${pct}%`,background:VERDE,borderRadius:2}}/>
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{fontSize:11,color:GRIS_TEXT,marginTop:10,paddingTop:8,borderTop:"1px solid #F0F0F0"}}>
+                {recoleccionesMes.length} recolección{recoleccionesMes.length!==1?"es":""} · {diasMesPendientes.length>0?`⏳ ${diasMesPendientes.length} días pendientes`:"✅ Todo recolectado"}
               </div>
             </div>
           </>
         )}
 
-        {topProv.length>0&&(
+        {/* ═══ NOTAS DE VENTAS ═══ */}
+        {ventasMes.filter(v=>v.nota).length>0&&(
           <>
-            <ST>🏪 Top proveedores / conceptos</ST>
-            <div style={{background:BLANCO,borderRadius:14,padding:"12px 14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-              {topProv.map(([nombre,monto],i)=>{
-                const pct=tg?Math.round((monto/tg)*100):0;
-                return(
-                  <div key={nombre} style={{marginBottom:i<topProv.length-1?10:0}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,marginBottom:3}}>
-                      <span style={{color:GRIS_DARK}}>{i+1}. {nombre}</span>
-                      <span style={{color:ROSA,fontWeight:900}}>{fmtMXN(monto)}</span>
-                    </div>
-                    <div style={{height:4,background:"#F0F0F0",borderRadius:2,overflow:"hidden"}}>
-                      <div style={{height:"100%",width:`${pct}%`,background:ROSA,borderRadius:2}}/>
-                    </div>
-                    <div style={{fontSize:10,color:GRIS_TEXT,marginTop:2}}>{pct}%</div>
-                  </div>
-                );
-              })}
-            </div>
+            <ST>📝 Notas de ventas</ST>
+            {ventasMes.filter(v=>v.nota).slice(0,3).map(v=>(
+              <div key={v.id} style={{background:BLANCO,borderRadius:12,padding:"10px 14px",marginBottom:8,boxShadow:"0 2px 6px rgba(0,0,0,0.04)",borderLeft:`3px solid ${VERDE}`}}>
+                <div style={{fontSize:11,color:GRIS_TEXT,marginBottom:3}}>{v.fecha} · {v.quien||"—"} · {fmtMXN(v.efectivo)}</div>
+                <div style={{fontSize:13,color:GRIS_DARK,fontStyle:"italic"}}>{v.nota}</div>
+              </div>
+            ))}
           </>
         )}
 
-        <ST>Registros {filtroQ!=="todos"?`· ${filtroQ}`:""}{lista.length>0?` (${lista.length})`:""}</ST>
-        {lista.length===0?<Empty>Sin gastos</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
+        {/* ═══ LISTA DE GASTOS ═══ */}
+        <ST>📋 Gastos {lista.length>0?`(${lista.length})`:""}</ST>
+        {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
       </Screen>
     );
   }
