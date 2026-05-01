@@ -42,6 +42,7 @@ const monthLabel=(k)=>{
 };
 const addDays=(iso,n)=>{const d=new Date(iso);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
 const lsLoad=(k)=>{try{return JSON.parse(localStorage.getItem(k)||"[]");}catch{return[];}};
+const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
 const exportExcel=(gastos,ventas,recolecciones,mk)=>{
@@ -54,7 +55,7 @@ const exportExcel=(gastos,ventas,recolecciones,mk)=>{
     "Fecha Pago":g.fecha_pago||"","Quién":g.quien||"","Nota":g.nota||"",
   })));
   wsD["!cols"]=[{wch:12},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:22}];
-  const totC={},totG=lista.reduce((s,g)=>s+g.monto,0);
+  const totC={},totG=lista.reduce((s,g)=>s+num(g.monto),0);
   lista.forEach(g=>{totC[g.cat]=(totC[g.cat]||0)+g.monto;});
   const rRows=CATS.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
     .map(c=>({Categoría:c.label,"Monto ($)":totC[c.id],"% del Total":totG?+((totC[c.id]/totG)*100).toFixed(1):0}));
@@ -244,7 +245,7 @@ export default function App(){
     // Forzar quien=usuarioActual si es Apolo (no toca chips)
     const quienFinal=usuarioActual==="Apolo"?"Apolo":rForm.quien;
     if(!rForm.selDias.length||!quienFinal)return;
-    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+(v?.efectivo||0);},0);
+    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+num(v?.efectivo);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
     const requiereAprobacion=quienFinal==="Apolo";
@@ -300,7 +301,7 @@ export default function App(){
   const currentMK=monthKey(todayISO());
   const months=[...new Set(gastos.map(g=>monthKey(g.fecha)))].filter(Boolean).sort().reverse();
   const gMes=(mk)=>gastos.filter(g=>monthKey(g.fecha)===mk);
-  const totG=(mk)=>gMes(mk).reduce((s,g)=>s+g.monto,0);
+  const totG=(mk)=>gMes(mk).reduce((s,g)=>s+num(g.monto),0);
   const porCat=(mk)=>{const m={};gMes(mk).forEach(g=>{m[g.cat]=(m[g.cat]||0)+g.monto;});return m;};
   const porQuien=(mk)=>{
     const m={};
@@ -310,9 +311,9 @@ export default function App(){
   const diasConVenta=ventas.map(v=>v.fecha);
   const diasRecolectados=recolecciones.flatMap(r=>r.fechas_cubiertas||[]);
   const diasPendientes=diasConVenta.filter(d=>!diasRecolectados.includes(d)).sort();
-  const montoPendiente=diasPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0);
+  const montoPendiente=diasPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
   const todayG=gastos.filter(g=>g.fecha===todayISO());
-  const todayTG=todayG.reduce((s,g)=>s+g.monto,0);
+  const todayTG=todayG.reduce((s,g)=>s+num(g.monto),0);
   const todayV=ventas.find(v=>v.fecha===todayISO());
   const creditosPendientes=gastos.filter(g=>g.tipo_pago==="credito"&&!g.pagado);
   const recoleccionesPendientesAprobacion=recolecciones.filter(r=>r.quien==="Apolo"&&!r.aprobada);
@@ -610,7 +611,7 @@ export default function App(){
           {rForm.selDias.length>0&&(
             <div style={{background:VERDE_BG,borderRadius:12,padding:"14px 16px",marginTop:4,border:"1px solid #A5D6A7",marginBottom:4}}>
               <div style={{fontSize:12,color:VERDE,fontWeight:700}}>Total a recolectar</div>
-              <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0))}</div>
+              <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0))}</div>
             </div>
           )}
 
@@ -627,7 +628,7 @@ export default function App(){
 
           {/* ── MONTO FÍSICO ── */}
           {(()=>{
-            const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0);
+            const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
             const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
             const faltante=montoFisico!=null?Math.max(0,montoDeclarado-montoFisico):0;
             const sobra=montoFisico!=null?Math.max(0,montoFisico-montoDeclarado):0;
@@ -714,12 +715,12 @@ export default function App(){
         <>
           <ST>Historial de recolecciones</ST>
           {(()=>{
-            const totalFaltantes=recolecciones.reduce((s,r)=>s+(r.faltante||0),0);
+            const totalFaltantes=recolecciones.reduce((s,r)=>s+num(r.faltante),0);
             return(
               <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                 <div style={{flex:1,minWidth:120,background:VERDE_BG,borderRadius:14,padding:"12px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
                   <div style={{fontSize:10,color:VERDE,fontWeight:700}}>Total recolectado</div>
-                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recolecciones.reduce((s,r)=>s+((r.monto_fisico??r.monto_total)||0),0))}</div>
+                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recolecciones.reduce((s,r)=>s+num(r.monto_fisico??r.monto_total),0))}</div>
                 </div>
                 <div style={{flex:1,minWidth:120,background:AZUL_BG,borderRadius:14,padding:"12px",border:"1.5px solid #90CAF9",textAlign:"center"}}>
                   <div style={{fontSize:10,color:AZUL,fontWeight:700}}>Recolecciones</div>
@@ -753,7 +754,7 @@ export default function App(){
                 {r.nota&&<div style={{fontSize:11,color:"#C0C0C0",fontStyle:"italic",marginTop:2}}>{r.nota}</div>}
               </div>
               <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <div style={{fontWeight:900,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(r.monto_fisico??r.monto_total)}</div>
+                <div style={{fontWeight:900,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(num(r.monto_fisico??r.monto_total))}</div>
                 <span style={{color:"#CCC",fontSize:18}}>›</span>
               </div>
             </button>
@@ -894,7 +895,7 @@ export default function App(){
     const v=ventas.find(v=>v.fecha===selVentaDia);
     const recol=recolecciones.find(r=>(r.fechas_cubiertas||[]).includes(selVentaDia));
     const gastosDia=gastos.filter(g=>g.fecha===selVentaDia);
-    const totalGDia=gastosDia.reduce((s,g)=>s+g.monto,0);
+    const totalGDia=gastosDia.reduce((s,g)=>s+num(g.monto),0);
     const backView=selRec?"detalle-recoleccion":"recoleccion";
     return(
       <Screen title={`Día · ${selVentaDia}`} onBack={()=>setView(backView)}>
@@ -940,7 +941,7 @@ export default function App(){
   if(view==="creditos"){
     const pendientes=gastos.filter(g=>g.tipo_pago==="credito"&&!g.pagado).sort((a,b)=>(a.fecha_vencimiento||"9").localeCompare(b.fecha_vencimiento||"9"));
     const pagados=gastos.filter(g=>g.tipo_pago==="credito"&&g.pagado).sort((a,b)=>(b.fecha_pago||"").localeCompare(a.fecha_pago||""));
-    const totalPendiente=pendientes.reduce((s,g)=>s+g.monto,0);
+    const totalPendiente=pendientes.reduce((s,g)=>s+num(g.monto),0);
     return(
       <Screen title="Créditos" onBack={()=>setView("inicio")}>
         <div style={{background:`linear-gradient(135deg,${AMBAR},#E65100)`,borderRadius:18,padding:"22px 20px",color:BLANCO,marginBottom:16,boxShadow:"0 8px 24px rgba(245,127,23,0.3)"}}>
@@ -1047,31 +1048,31 @@ export default function App(){
       if(resHasta&&g.fecha>resHasta)return false;
       return true;
     });
-    const tg=listaCompleta.reduce((s,g)=>s+g.monto,0);
+    const tg=listaCompleta.reduce((s,g)=>s+num(g.monto),0);
     // Categorías de la lista filtrada
     const cats={};listaCompleta.forEach(g=>{cats[g.cat]=(cats[g.cat]||0)+g.monto;});
     // Personas de la lista filtrada
     const quien={};listaCompleta.forEach(g=>{const k=g.quien||"Sin asignar";quien[k]=(quien[k]||0)+g.monto;});
     const lista=listaCompleta.sort((a,b)=>b.fecha.localeCompare(a.fecha));
     const ventasMes=ventas.filter(v=>monthKey(v.fecha)===mk);
-    const totalVentasMes=ventasMes.reduce((s,v)=>s+(v.efectivo||0),0);
+    const totalVentasMes=ventasMes.reduce((s,v)=>s+num(v.efectivo),0);
     const credMes=gMes(mk).filter(g=>g.tipo_pago==="credito"&&!g.pagado);
-    const totCred=credMes.reduce((s,g)=>s+g.monto,0);
+    const totCred=credMes.reduce((s,g)=>s+num(g.monto),0);
     const diasConV=ventasMes.length;
     // RECOLECCIÓN DEL MES
     const recoleccionesMes=recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk);
-    const totalRecolectadoMes=recoleccionesMes.reduce((s,r)=>s+((r.monto_fisico??r.monto_total)||0),0);
+    const totalRecolectadoMes=recoleccionesMes.reduce((s,r)=>s+num(r.monto_fisico??r.monto_total),0);
     // Pendiente SOLO del mes seleccionado: días con venta del mes que no estén recolectados
     const diasMesConVenta=ventasMes.map(v=>v.fecha);
     const diasMesPendientes=diasMesConVenta.filter(d=>!diasRecolectados.includes(d));
-    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0);
+    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
     // Faltantes del mes (diferencia entre lo que debió recolectarse y lo físico)
-    const faltantesMes=recoleccionesMes.reduce((s,r)=>s+(r.faltante||0),0);
+    const faltantesMes=recoleccionesMes.reduce((s,r)=>s+num(r.faltante),0);
     // Recolectado por persona en el mes
     const recoPorPersona={};
     recoleccionesMes.forEach(r=>{
       const k=r.quien||"—";
-      const m=(r.monto_fisico!=null?r.monto_fisico:r.monto_total)||0;
+      const m=num(r.monto_fisico!=null?r.monto_fisico:r.monto_total);
       recoPorPersona[k]=(recoPorPersona[k]||0)+m;
     });
     // Top proveedores de la lista filtrada
@@ -1276,12 +1277,12 @@ export default function App(){
     const tg=totG(mk),tgP=totG(mkP);
     const ventasMes=ventas.filter(v=>monthKey(v.fecha)===mk);
     const ventasMesP=ventas.filter(v=>monthKey(v.fecha)===mkP);
-    const tvM=ventasMes.reduce((s,v)=>s+(v.efectivo||0),0);
-    const tvMP=ventasMesP.reduce((s,v)=>s+(v.efectivo||0),0);
-    const totRecM=recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk).reduce((s,r)=>s+(r.monto_total||0),0);
+    const tvM=ventasMes.reduce((s,v)=>s+num(v.efectivo),0);
+    const tvMP=ventasMesP.reduce((s,v)=>s+num(v.efectivo),0);
+    const totRecM=recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk).reduce((s,r)=>s+num(r.monto_total),0);
     const cats=porCat(mk),catsP=porCat(mkP);
     const credMes=gMes(mk).filter(g=>g.tipo_pago==="credito"&&!g.pagado);
-    const totCred=credMes.reduce((s,g)=>s+g.monto,0);
+    const totCred=credMes.reduce((s,g)=>s+num(g.monto),0);
     const diasDelMes=new Date(new Date().getFullYear(),new Date().getMonth()+1,0).getDate();
     const diasConV=ventasMes.length;
     const diasSinV=diasDelMes-diasConV;
@@ -1450,22 +1451,22 @@ export default function App(){
     const dataBarras=ultimos6.map(mk=>({
       mes:monthLabel(mk).slice(0,3),
       gastos:totG(mk),
-      ventas:ventas.filter(v=>monthKey(v.fecha)===mk).reduce((s,v)=>s+(v.efectivo||0),0),
-      recolectado:recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk).reduce((s,r)=>s+(r.monto_total||0),0),
+      ventas:ventas.filter(v=>monthKey(v.fecha)===mk).reduce((s,v)=>s+num(v.efectivo),0),
+      recolectado:recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk).reduce((s,r)=>s+num(r.monto_total),0),
     }));
     const maxVal=Math.max(...dataBarras.flatMap(d=>[d.gastos,d.ventas]),1);
     const mk=currentMK;
-    const tvM=ventas.filter(v=>monthKey(v.fecha)===mk).reduce((s,v)=>s+(v.efectivo||0),0);
+    const tvM=ventas.filter(v=>monthKey(v.fecha)===mk).reduce((s,v)=>s+num(v.efectivo),0);
     const tgM=totG(mk);
     const balance=tvM-tgM;
     // Dias de venta ultimos 30 dias
     const ventasOrdenadas=[...ventas].sort((a,b)=>a.fecha.localeCompare(b.fecha)).slice(-30);
-    const promedioVenta=ventasOrdenadas.length?ventasOrdenadas.reduce((s,v)=>s+(v.efectivo||0),0)/ventasOrdenadas.length:0;
+    const promedioVenta=ventasOrdenadas.length?ventasOrdenadas.reduce((s,v)=>s+num(v.efectivo),0)/ventasOrdenadas.length:0;
     // Top 3 proveedores por gasto total
     const gastosPorConcepto={};
     gastos.forEach(g=>{if(!gastosPorConcepto[g.concepto])gastosPorConcepto[g.concepto]=0;gastosPorConcepto[g.concepto]+=g.monto;});
     const topProveedores=Object.entries(gastosPorConcepto).sort((a,b)=>b[1]-a[1]).slice(0,5);
-    const totalGastosTodo=gastos.reduce((s,g)=>s+g.monto,0);
+    const totalGastosTodo=gastos.reduce((s,g)=>s+num(g.monto),0);
     // Días de semana con más ventas
     const ventasPorDia={};
     const diasNombres=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
@@ -1565,12 +1566,12 @@ export default function App(){
         {/* Gráfica de categorías acumuladas (todo el tiempo) */}
         <ST>🍰 Distribución de gastos por categoría</ST>
         <div style={{background:BLANCO,borderRadius:16,padding:"14px",marginBottom:16,boxShadow:"0 2px 10px rgba(0,0,0,0.06)"}}>
-          {CATS.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+g.monto,0);return tot>0;}).sort((a,b)=>{
-            const ta=gastos.filter(g=>g.cat===a.id).reduce((s,g)=>s+g.monto,0);
-            const tb=gastos.filter(g=>g.cat===b.id).reduce((s,g)=>s+g.monto,0);
+          {CATS.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);return tot>0;}).sort((a,b)=>{
+            const ta=gastos.filter(g=>g.cat===a.id).reduce((s,g)=>s+num(g.monto),0);
+            const tb=gastos.filter(g=>g.cat===b.id).reduce((s,g)=>s+num(g.monto),0);
             return tb-ta;
           }).map(c=>{
-            const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+g.monto,0);
+            const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);
             const pct=totalGastosTodo?Math.round((tot/totalGastosTodo)*100):0;
             return(
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
@@ -1600,7 +1601,7 @@ export default function App(){
             {label:"Balance neto",val:fmtMXN(balance),color:balance>=0?VERDE:"#E53935"},
             {label:"Margen bruto",val:tvM>0?`${Math.round(((tvM-tgM)/tvM)*100)}%`:"—",color:balance>=0?VERDE:"#E53935"},
             {label:"Efectivo pendiente recolección",val:fmtMXN(montoPendiente),color:AMBAR},
-            {label:"Créditos por pagar",val:fmtMXN(creditosPendientes.reduce((s,g)=>s+g.monto,0)),color:creditosPendientes.length>0?AMBAR:VERDE},
+            {label:"Créditos por pagar",val:fmtMXN(creditosPendientes.reduce((s,g)=>s+num(g.monto),0)),color:creditosPendientes.length>0?AMBAR:VERDE},
             {label:"Días con venta registrada",val:`${ventas.filter(v=>monthKey(v.fecha)===mk).length} días`,color:AZUL},
             {label:"Ticket promedio diario",val:fmtMXN(promedioVenta),color:AZUL},
           ].map(r=>(
