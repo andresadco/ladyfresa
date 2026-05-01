@@ -86,6 +86,11 @@ export default function App(){
   const[selRec,setSelRec]=useState(null);
   const[selVentaDia,setSelVentaDia]=useState(null);
   const[filtroQ,setFiltroQ]=useState("todos");
+  const[resMK,setResMK]=useState(null); // null = mes actual
+  const[resCat,setResCat]=useState("todos");
+  const[resBuscar,setResBuscar]=useState("");
+  const[resDesde,setResDesde]=useState("");
+  const[resHasta,setResHasta]=useState("");
   const[error,setError]=useState(null);
   const[pinUsuario,setPinUsuario]=useState(null); // usuario pendiente de PIN
   const[pinInput,setPinInput]=useState("");
@@ -150,6 +155,8 @@ export default function App(){
   const saveGasto=async()=>{
     if(!form.cat){setCatErr(true);setTimeout(()=>setCatErr(false),2000);return;}
     if(!form.monto||!form.concepto)return;
+    // Si Apolo, forzar quien=Apolo
+    const quienFinal=usuarioActual==="Apolo"?"Apolo":(form.quien||usuarioActual||"");
     const dias=parseInt(form.dias_credito)||0;
     const payload={
       fecha:form.fecha,concepto:form.concepto,cat:form.cat,
@@ -157,7 +164,7 @@ export default function App(){
       dias_credito:dias||null,
       fecha_vencimiento:form.tipo_pago==="credito"&&dias?addDays(form.fecha,dias):null,
       pagado:form.tipo_pago==="contado",
-      quien:form.quien,nota:form.nota,foto:form.foto,
+      quien:quienFinal,nota:form.nota,foto:form.foto,
     };
     let e;
     if(editandoId){({error:e}=await sb.from("gastos").update(payload).eq("id",editandoId));}
@@ -180,7 +187,9 @@ export default function App(){
 
   const deleteGasto=async(id)=>{
     const g=gastos.find(x=>x.id===id);
-    if(usuarioActual!=="Andres"&&g?.quien!==usuarioActual)return;
+    if(usuarioActual==="Apolo")return;
+    const esAdmin=usuarioActual==="Andres"||usuarioActual==="José Luis";
+    if(!esAdmin&&g?.quien!==usuarioActual)return;
     await sb.from("gastos").delete().eq("id",id);
     const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});
     if(data)setGastos(data);
@@ -489,7 +498,10 @@ export default function App(){
       <div style={S.chipRow}>{FORMA_OPTS.map(o=><Chip key={o} active={form.forma===o} color={ROSA} onClick={()=>setForm(f=>({...f,forma:o}))}>{o}</Chip>)}</div>
 
       <FL>¿Quién pagó?</FL>
-      <div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={form.quien===o} color={GRIS_MED} onClick={()=>setForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+      {usuarioActual==="Apolo"
+        ?<div style={{background:"#FFF8E1",borderRadius:12,padding:"10px 14px",border:"1.5px solid #FFE082",fontSize:13,fontWeight:700,color:"#E65100"}}>🧑 Apolo (registrado automáticamente)</div>
+        :<div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={form.quien===o} color={GRIS_MED} onClick={()=>setForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+      }
 
       <FL>Nota (opcional)</FL>
       <textarea style={{...S.input,height:60,resize:"none"}} placeholder="Observación…"
@@ -682,7 +694,7 @@ export default function App(){
           <FL>Nota</FL>
           <textarea style={{...S.input,height:56,resize:"none"}} value={rForm.nota} onChange={e=>setRForm(f=>({...f,nota:e.target.value}))}/>
           {error&&<div style={S.errorBanner}>{error}</div>}
-          <button onClick={saveRecoleccion} disabled={!rForm.selDias.length||!rForm.quien}
+          <button onClick={saveRecoleccion} disabled={!rForm.selDias.length||(!rForm.quien&&usuarioActual!=="Apolo")}
             style={{...S.btnPri,opacity:(!rForm.selDias.length||!rForm.quien)?0.4:1,background:rSaved?VERDE:ROSA}}>
             {rSaved?"✅ ¡Recolectado!":"Confirmar Recolección"}
           </button>
@@ -1016,18 +1028,74 @@ export default function App(){
   // VISTA: RESUMEN MES
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="resumen"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;}
-    const mk=currentMK,tg=totG(mk);
-    const cats=porCat(mk),quien=porQuien(mk);
-    const lista=gMes(mk).filter(g=>filtroQ==="todos"||g.quien===filtroQ).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const mk=resMK||currentMK;
+    // Aplicar todos los filtros
+    const listaCompleta=gMes(mk).filter(g=>{
+      if(filtroQ!=="todos"&&g.quien!==filtroQ)return false;
+      if(resCat!=="todos"&&g.cat!==resCat)return false;
+      if(resBuscar&&!(g.concepto||"").toLowerCase().includes(resBuscar.toLowerCase()))return false;
+      if(resDesde&&g.fecha<resDesde)return false;
+      if(resHasta&&g.fecha>resHasta)return false;
+      return true;
+    });
+    const tg=listaCompleta.reduce((s,g)=>s+g.monto,0);
+    // Categorías de la lista filtrada
+    const cats={};listaCompleta.forEach(g=>{cats[g.cat]=(cats[g.cat]||0)+g.monto;});
+    // Personas de la lista filtrada
+    const quien={};listaCompleta.forEach(g=>{const k=g.quien||"Sin asignar";quien[k]=(quien[k]||0)+g.monto;});
+    const lista=listaCompleta.sort((a,b)=>b.fecha.localeCompare(a.fecha));
     const ventasMes=ventas.filter(v=>monthKey(v.fecha)===mk);
     const totalVentasMes=ventasMes.reduce((s,v)=>s+(v.efectivo||0),0);
     const credMes=gMes(mk).filter(g=>g.tipo_pago==="credito"&&!g.pagado);
     const totCred=credMes.reduce((s,g)=>s+g.monto,0);
-    const diasDelMes=new Date(new Date().getFullYear(),new Date().getMonth()+1,0).getDate();
     const diasConV=ventasMes.length;
+    // Top proveedores de la lista filtrada
+    const provMap={};listaCompleta.forEach(g=>{const k=g.concepto||"Sin nombre";provMap[k]=(provMap[k]||0)+g.monto;});
+    const topProv=Object.entries(provMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
         action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk)}/>}>
+
+        {/* SELECTOR DE MES */}
+        <ST>📅 Mes</ST>
+        <div style={{...S.chipRow,marginBottom:8,overflowX:"auto",flexWrap:"nowrap",paddingBottom:4}}>
+          {months.slice(0,12).map(m=>(
+            <Chip key={m} active={mk===m} color={ROSA} onClick={()=>setResMK(m===currentMK?null:m)}>{monthLabel(m)}</Chip>
+          ))}
+        </div>
+
+        {/* FILTROS AVANZADOS */}
+        <details style={{marginBottom:12,background:GRIS_LIGHT,borderRadius:12,padding:"10px 14px"}}>
+          <summary style={{fontSize:12,fontWeight:800,color:GRIS_MED,cursor:"pointer",textTransform:"uppercase",letterSpacing:0.6}}>
+            🔎 Filtros avanzados
+            {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&<span style={{marginLeft:8,fontSize:10,color:ROSA}}>● activos</span>}
+          </summary>
+          <div style={{marginTop:10}}>
+            <FL>Buscar concepto / proveedor</FL>
+            <input value={resBuscar} onChange={e=>setResBuscar(e.target.value)} placeholder="Ej: Walmart, gasolina..." style={S.input}/>
+            <FL>Categoría</FL>
+            <div style={S.chipRow}>
+              <Chip active={resCat==="todos"} color={ROSA} onClick={()=>setResCat("todos")}>Todas</Chip>
+              {CATS.map(c=><Chip key={c.id} active={resCat===c.id} color={c.color} onClick={()=>setResCat(c.id)}>{c.emoji} {c.label}</Chip>)}
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <div style={{flex:1}}>
+                <FL>Desde</FL>
+                <input type="date" value={resDesde} onChange={e=>setResDesde(e.target.value)} style={S.input}/>
+              </div>
+              <div style={{flex:1}}>
+                <FL>Hasta</FL>
+                <input type="date" value={resHasta} onChange={e=>setResHasta(e.target.value)} style={S.input}/>
+              </div>
+            </div>
+            {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&(
+              <button onClick={()=>{setResCat("todos");setResBuscar("");setResDesde("");setResHasta("");}}
+                style={{marginTop:10,padding:"8px 14px",borderRadius:8,border:"1px solid #DDD",background:BLANCO,fontSize:12,fontWeight:700,color:GRIS_MED,cursor:"pointer",fontFamily:"inherit"}}>
+                ✕ Limpiar filtros
+              </button>
+            )}
+          </div>
+        </details>
 
         <ST>📊 Dashboard del mes</ST>
         <div style={{display:"flex",gap:8,marginBottom:8}}>
@@ -1110,7 +1178,30 @@ export default function App(){
           );
         })}
 
-        <ST>Registros {filtroQ!=="todos"?`· ${filtroQ}`:""}</ST>
+        {topProv.length>0&&(
+          <>
+            <ST>🏪 Top proveedores / conceptos</ST>
+            <div style={{background:BLANCO,borderRadius:14,padding:"12px 14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+              {topProv.map(([nombre,monto],i)=>{
+                const pct=tg?Math.round((monto/tg)*100):0;
+                return(
+                  <div key={nombre} style={{marginBottom:i<topProv.length-1?10:0}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,marginBottom:3}}>
+                      <span style={{color:GRIS_DARK}}>{i+1}. {nombre}</span>
+                      <span style={{color:ROSA,fontWeight:900}}>{fmtMXN(monto)}</span>
+                    </div>
+                    <div style={{height:4,background:"#F0F0F0",borderRadius:2,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${pct}%`,background:ROSA,borderRadius:2}}/>
+                    </div>
+                    <div style={{fontSize:10,color:GRIS_TEXT,marginTop:2}}>{pct}%</div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <ST>Registros {filtroQ!=="todos"?`· ${filtroQ}`:""}{lista.length>0?` (${lista.length})`:""}</ST>
         {lista.length===0?<Empty>Sin gastos</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
       </Screen>
     );
