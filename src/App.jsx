@@ -123,6 +123,14 @@ export default function App(){
     }
   },[view,usuarioActual]);
 
+  // Redirigir a inicio si el usuario está en vista restringida
+  useEffect(()=>{
+    const restringidas=["resumen","dashboard","historial","analitica","detalle","creditos"];
+    if(restringidas.includes(view)&&usuarioActual&&!PUEDE_VER_NUMEROS.includes(usuarioActual)){
+      setView("inicio");
+    }
+  },[view,usuarioActual]);
+
   useEffect(()=>{
     (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
@@ -1028,7 +1036,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: RESUMEN MES
   // ══════════════════════════════════════════════════════════════════════════
-  if(view==="resumen"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;}
+  if(view==="resumen"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
     const mk=resMK||currentMK;
     // Aplicar todos los filtros
     const listaCompleta=gMes(mk).filter(g=>{
@@ -1262,7 +1270,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: DASHBOARD
   // ══════════════════════════════════════════════════════════════════════════
-  if(view==="dashboard"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;}
+  if(view==="dashboard"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
     const mk=currentMK;
     const mkP=(()=>{const d=new Date();d.setMonth(d.getMonth()-1);return monthKey(d.toISOString());})();
     const tg=totG(mk),tgP=totG(mkP);
@@ -1376,7 +1384,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: HISTORIAL
   // ══════════════════════════════════════════════════════════════════════════
-  if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;} return(
+  if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
       action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
@@ -1435,7 +1443,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: ANALÍTICA / TENDENCIAS
   // ══════════════════════════════════════════════════════════════════════════
-  if(view==="analitica"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual)){setView("inicio");return null;}
+  if(view==="analitica"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
     // Últimos 6 meses
     const ultimos6=[];
     for(let i=5;i>=0;i--){const d=new Date();d.setMonth(d.getMonth()-i);ultimos6.push(monthKey(d.toISOString()));}
