@@ -91,6 +91,7 @@ export default function App(){
   const[resBuscar,setResBuscar]=useState("");
   const[resDesde,setResDesde]=useState("");
   const[resHasta,setResHasta]=useState("");
+  const[resFiltrosOpen,setResFiltrosOpen]=useState(false);
   const[error,setError]=useState(null);
   const[pinUsuario,setPinUsuario]=useState(null); // usuario pendiente de PIN
   const[pinInput,setPinInput]=useState("");
@@ -710,7 +711,7 @@ export default function App(){
               <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                 <div style={{flex:1,minWidth:120,background:VERDE_BG,borderRadius:14,padding:"12px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
                   <div style={{fontSize:10,color:VERDE,fontWeight:700}}>Total recolectado</div>
-                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recolecciones.reduce((s,r)=>s+(r.monto_fisico??r.monto_total)||0,0))}</div>
+                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recolecciones.reduce((s,r)=>s+((r.monto_fisico??r.monto_total)||0),0))}</div>
                 </div>
                 <div style={{flex:1,minWidth:120,background:AZUL_BG,borderRadius:14,padding:"12px",border:"1.5px solid #90CAF9",textAlign:"center"}}>
                   <div style={{fontSize:10,color:AZUL,fontWeight:700}}>Recolecciones</div>
@@ -1058,6 +1059,13 @@ export default function App(){
     const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0);
     // Faltantes del mes (diferencia entre lo que debió recolectarse y lo físico)
     const faltantesMes=recoleccionesMes.reduce((s,r)=>s+(r.faltante||0),0);
+    // Recolectado por persona en el mes
+    const recoPorPersona={};
+    recoleccionesMes.forEach(r=>{
+      const k=r.quien||"—";
+      const m=(r.monto_fisico!=null?r.monto_fisico:r.monto_total)||0;
+      recoPorPersona[k]=(recoPorPersona[k]||0)+m;
+    });
     // Top proveedores de la lista filtrada
     const provMap={};listaCompleta.forEach(g=>{const k=g.concepto||"Sin nombre";provMap[k]=(provMap[k]||0)+g.monto;});
     const topProv=Object.entries(provMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
@@ -1074,11 +1082,13 @@ export default function App(){
         </div>
 
         {/* FILTROS AVANZADOS */}
-        <details style={{marginBottom:12,background:GRIS_LIGHT,borderRadius:12,padding:"10px 14px"}}>
-          <summary style={{fontSize:12,fontWeight:800,color:GRIS_MED,cursor:"pointer",textTransform:"uppercase",letterSpacing:0.6}}>
-            🔎 Filtros avanzados
-            {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&<span style={{marginLeft:8,fontSize:10,color:ROSA}}>● activos</span>}
-          </summary>
+        <button onClick={()=>setResFiltrosOpen(!resFiltrosOpen)}
+          style={{width:"100%",marginBottom:resFiltrosOpen?0:12,background:GRIS_LIGHT,border:"none",borderRadius:resFiltrosOpen?"12px 12px 0 0":12,padding:"12px 14px",fontSize:12,fontWeight:800,color:GRIS_MED,cursor:"pointer",fontFamily:"inherit",textTransform:"uppercase",letterSpacing:0.6,textAlign:"left"}}>
+          🔎 Filtros avanzados {resFiltrosOpen?"▲":"▼"}
+          {(resCat!=="todos"||resBuscar||resDesde||resHasta)&&<span style={{marginLeft:8,fontSize:10,color:ROSA}}>● activos</span>}
+        </button>
+        {resFiltrosOpen&&(
+          <div style={{marginBottom:12,background:GRIS_LIGHT,borderRadius:"0 0 12px 12px",padding:"4px 14px 14px"}}>
           <div style={{marginTop:10}}>
             <FL>Buscar concepto / proveedor</FL>
             <input value={resBuscar} onChange={e=>setResBuscar(e.target.value)} placeholder="Ej: Walmart, gasolina..." style={S.input}/>
@@ -1104,7 +1114,8 @@ export default function App(){
               </button>
             )}
           </div>
-        </details>
+          </div>
+        )}
 
         <ST>📊 Dashboard del mes</ST>
         <div style={{display:"flex",gap:8,marginBottom:8}}>
@@ -1206,14 +1217,12 @@ export default function App(){
                 )}
               </div>
               {/* Por persona */}
-              {(()=>{const porP={};recoleccionesMes.forEach(r=>{const k=r.quien||"—";porP[k]=(porP[k]||0)+((r.monto_fisico??r.monto_total)||0);});
-                return Object.entries(porP).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
-                  <div key={nombre} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
-                    <span style={{color:GRIS_DARK,fontWeight:600}}>{nombre==="Apolo"?"🧑 ":""}{nombre}</span>
-                    <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(monto)}</span>
-                  </div>
-                ));
-              })()}
+              {Object.entries(recoPorPersona).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
+                <div key={nombre} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
+                  <span style={{color:GRIS_DARK,fontWeight:600}}>{nombre==="Apolo"?"🧑 ":""}{nombre}</span>
+                  <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(monto)}</span>
+                </div>
+              ))}
               <div style={{fontSize:11,color:GRIS_TEXT,marginTop:8,paddingTop:8,borderTop:"1px solid #F0F0F0"}}>
                 {recoleccionesMes.length} recolección{recoleccionesMes.length!==1?"es":""} este mes
               </div>
