@@ -1049,6 +1049,15 @@ export default function App(){
     const credMes=gMes(mk).filter(g=>g.tipo_pago==="credito"&&!g.pagado);
     const totCred=credMes.reduce((s,g)=>s+g.monto,0);
     const diasConV=ventasMes.length;
+    // RECOLECCIÓN DEL MES
+    const recoleccionesMes=recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk);
+    const totalRecolectadoMes=recoleccionesMes.reduce((s,r)=>s+((r.monto_fisico??r.monto_total)||0),0);
+    // Pendiente SOLO del mes seleccionado: días con venta del mes que no estén recolectados
+    const diasMesConVenta=ventasMes.map(v=>v.fecha);
+    const diasMesPendientes=diasMesConVenta.filter(d=>!diasRecolectados.includes(d));
+    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+(v?.efectivo||0);},0);
+    // Faltantes del mes (diferencia entre lo que debió recolectarse y lo físico)
+    const faltantesMes=recoleccionesMes.reduce((s,r)=>s+(r.faltante||0),0);
     // Top proveedores de la lista filtrada
     const provMap={};listaCompleta.forEach(g=>{const k=g.concepto||"Sin nombre";provMap[k]=(provMap[k]||0)+g.monto;});
     const topProv=Object.entries(provMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
@@ -1113,12 +1122,13 @@ export default function App(){
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${AZUL}`}}>
             <div style={{fontSize:10,color:AZUL,fontWeight:800,marginBottom:4}}>✅ RECOLECTADO</div>
-            <div style={{fontSize:20,fontWeight:900,color:AZUL}}>{fmtMXN(recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk).reduce((s,r)=>s+(r.monto_total||0),0))}</div>
+            <div style={{fontSize:20,fontWeight:900,color:AZUL}}>{fmtMXN(totalRecolectadoMes)}</div>
+            <div style={{fontSize:10,color:GRIS_TEXT}}>{recoleccionesMes.length} recolecciones</div>
           </div>
           <div style={{flex:1,...S.dashCard,borderTop:`3px solid ${AMBAR}`}}>
             <div style={{fontSize:10,color:AMBAR,fontWeight:800,marginBottom:4}}>⏳ PENDIENTE</div>
-            <div style={{fontSize:20,fontWeight:900,color:AMBAR}}>{fmtMXN(montoPendiente)}</div>
-            <div style={{fontSize:10,color:GRIS_TEXT}}>{diasPendientes.length} días</div>
+            <div style={{fontSize:20,fontWeight:900,color:AMBAR}}>{fmtMXN(pendienteMes)}</div>
+            <div style={{fontSize:10,color:GRIS_TEXT}}>{diasMesPendientes.length} días</div>
           </div>
         </div>
 
@@ -1177,6 +1187,39 @@ export default function App(){
             </div>
           );
         })}
+
+        {/* Detalle de recolecciones del mes */}
+        {recoleccionesMes.length>0&&(
+          <>
+            <ST>💰 Recolecciones de {monthLabel(mk)}</ST>
+            <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",paddingBottom:10,marginBottom:10,borderBottom:"1px solid #F0F0F0"}}>
+                <div>
+                  <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:700,marginBottom:2}}>RECOLECTADO EN EFECTIVO</div>
+                  <div style={{fontSize:22,fontWeight:900,color:VERDE}}>{fmtMXN(totalRecolectadoMes)}</div>
+                </div>
+                {faltantesMes>0&&(
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:11,color:"#E53935",fontWeight:700,marginBottom:2}}>FALTANTES</div>
+                    <div style={{fontSize:18,fontWeight:900,color:"#E53935"}}>{fmtMXN(faltantesMes)}</div>
+                  </div>
+                )}
+              </div>
+              {/* Por persona */}
+              {(()=>{const porP={};recoleccionesMes.forEach(r=>{const k=r.quien||"—";porP[k]=(porP[k]||0)+((r.monto_fisico??r.monto_total)||0);});
+                return Object.entries(porP).sort((a,b)=>b[1]-a[1]).map(([nombre,monto])=>(
+                  <div key={nombre} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
+                    <span style={{color:GRIS_DARK,fontWeight:600}}>{nombre==="Apolo"?"🧑 ":""}{nombre}</span>
+                    <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(monto)}</span>
+                  </div>
+                ));
+              })()}
+              <div style={{fontSize:11,color:GRIS_TEXT,marginTop:8,paddingTop:8,borderTop:"1px solid #F0F0F0"}}>
+                {recoleccionesMes.length} recolección{recoleccionesMes.length!==1?"es":""} este mes
+              </div>
+            </div>
+          </>
+        )}
 
         {topProv.length>0&&(
           <>
