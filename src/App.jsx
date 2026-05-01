@@ -1051,6 +1051,7 @@ export default function App(){
     const credMes=gMes(mk).filter(g=>g.tipo_pago==="credito"&&!g.pagado);
     const totCred=credMes.reduce((s,g)=>s+num(g.monto),0);
     const diasConV=ventasMes.length;
+    const diasDelMes=new Date(parseInt(mk.slice(0,4)),parseInt(mk.slice(5,7)),0).getDate();
     // RECOLECCIÓN DEL MES
     const recoleccionesMes=recolecciones.filter(r=>monthKey(r.fecha_recoleccion)===mk);
     const totalRecolectadoMes=recoleccionesMes.reduce((s,r)=>s+num(r.monto_fisico??r.monto_total),0);
