@@ -124,14 +124,6 @@ export default function App(){
     }
   },[view,usuarioActual]);
 
-  // Redirigir a inicio si el usuario está en vista restringida
-  useEffect(()=>{
-    const restringidas=["resumen","dashboard","historial","analitica","detalle","creditos"];
-    if(restringidas.includes(view)&&usuarioActual&&!PUEDE_VER_NUMEROS.includes(usuarioActual)){
-      setView("inicio");
-    }
-  },[view,usuarioActual]);
-
   useEffect(()=>{
     (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
