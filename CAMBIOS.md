@@ -1,29 +1,20 @@
 # 🍓 Lady Fresa — Cambios en esta versión
 
-## 💳 Separación efectivo vs tarjeta
+## 🎨 Resumen rediseñado (v3)
 
-Ahora todos los gastos se cuentan en el balance, pero **ves los dos números por separado** para saber qué está en caja y qué fue por tarjeta/transferencia.
+El balance del mes ahora es mucho más fácil de leer:
 
-### En la pantalla de **Resumen**:
+- **Dos balances grandes lado a lado**: rosa (Total = Ventas − Todos los gastos) y verde (En caja = Ventas − Gastos en efectivo). El verde es lo que físicamente debes tener.
+- **4 mini-cards abajo** con barra de color para identificarlas: Ventas (verde), Recolectado (azul), Gastos efectivo (rosa), Gastos otros (morado).
+- **Volvió "Recolectado"** al área de arriba, que se había perdido en la versión anterior.
 
-- **Balance del mes** (grande, arriba) → sigue siendo Ventas − Todos los gastos
-- **💵 Solo efectivo** (chip debajo del balance) → Ventas − Gastos en efectivo. Esto es lo que realmente queda en la caja.
-- **Bloque de abajo del hero** → ya no muestra Ventas/Gastos/Recolect; ahora muestra **Ventas / Gastos Efectivo / Gastos Otros**.
-- **Nueva sección "💳 Gastos por método de pago"** → desglose visual con barras de cada forma (Efectivo, Mercado Pago, Transfer BBVA, Tarjeta Santander, Otro) con su monto y porcentaje.
+Más abajo del hero sigue intacta la sección "💳 Gastos por método de pago" con las barras de cada forma, y la sección "💰 Recolecciones del mes" con el detalle por persona.
 
-### En **Tendencias** (Dashboard):
+## 💳 Separación efectivo vs tarjeta (sigue igual)
 
-- Las KPIs ahora muestran 6 tarjetas: Ventas, Promedio/día, Gastos efectivo, Gastos otros, **Balance total**, **Balance efectivo**.
-- En el "Resumen ejecutivo (inversores)" se agregaron las filas "Gastos en efectivo", "Gastos con tarjeta / otros" y "Balance efectivo (caja)".
+En **Tendencias** (Dashboard): KPIs muestran Ventas, Promedio/día, Gastos efectivo, Gastos otros, Balance total, Balance efectivo. El resumen ejecutivo muestra "Gastos en efectivo", "Gastos con tarjeta / otros" y "Balance efectivo (caja)" como filas separadas.
 
 ## 🧹 Estructura limpia
-
-Borré 7 archivos que no se usaban:
-
-- `App.jsx` duplicado en la raíz (Vite usa `src/App.jsx`) — **el bueno se conservó**, ese era el más nuevo y se movió a `src/App.jsx`. Los cambios del Apolo flow (auto-asignación universal, mensajes de error claros) ahora sí están corriendo.
-- `main.jsx` duplicado en la raíz
-- `icon-192.png`, `icon-512.png`, `manifest.json` en la raíz (Vite los sirve desde `public/`)
-- `ladyfresa-apolo (2).zip`, `(3).zip`, `(4).zip` — backups viejos
 
 Estructura final:
 
@@ -34,8 +25,8 @@ ladyfresa/
 ├── package.json
 ├── README.md
 ├── INSTRUCCIONES.md
-├── MIGRACION_SUPABASE.sql   ← ejecuta esto en Supabase si aún no lo hiciste
-├── CAMBIOS.md               ← este archivo
+├── MIGRACION_SUPABASE.sql
+├── CAMBIOS.md
 ├── src/
 │   ├── main.jsx
 │   └── App.jsx
@@ -47,4 +38,4 @@ ladyfresa/
 
 ## ✅ Verificado
 
-Hice `vite build` y compila sin errores. Cuando subas a GitHub, Vercel va a hacer el deploy automáticamente.
+`vite build` compila sin errores. Cuando subas a GitHub, Vercel hace deploy automático.
