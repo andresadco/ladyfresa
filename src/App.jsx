@@ -1091,42 +1091,54 @@ export default function App(){
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
         action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk)}/>}>
 
-        {/* ═══ HERO: BALANCE GRANDE ═══ */}
-        <div style={{background:`linear-gradient(135deg, ${ROSA} 0%, #C2185B 100%)`,borderRadius:18,padding:"18px 18px 16px",marginBottom:14,color:BLANCO,boxShadow:"0 8px 24px rgba(232,23,93,0.25)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-            <div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.75)",fontWeight:700,textTransform:"uppercase",letterSpacing:0.8}}>Balance del mes</div>
-              <div style={{fontSize:32,fontWeight:900,letterSpacing:-1,marginTop:2,color:totalVentasMes-tg>=0?"#A5F3A5":"#FFC1C1"}}>
-                {totalVentasMes-tg>=0?"+":""}{fmtMXN(totalVentasMes-tg)}
-              </div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginTop:2}}>Ventas − Gastos totales</div>
-              {/* Balance solo-efectivo: lo que realmente queda en caja */}
-              <div style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:8,background:"rgba(255,255,255,0.15)",padding:"4px 10px",borderRadius:8}}>
-                <span style={{fontSize:10,color:"rgba(255,255,255,0.8)",fontWeight:700}}>💵 Solo efectivo:</span>
-                <span style={{fontSize:13,fontWeight:900,color:totalVentasMes-tgEfectivo>=0?"#A5F3A5":"#FFC1C1"}}>
-                  {totalVentasMes-tgEfectivo>=0?"+":""}{fmtMXN(totalVentasMes-tgEfectivo)}
-                </span>
-              </div>
-            </div>
+        {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
+        <div style={{marginBottom:14}}>
+          {/* Selector de mes + título */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,padding:"0 2px"}}>
+            <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:800,textTransform:"uppercase",letterSpacing:0.8}}>Balance del mes</div>
             <button onClick={()=>{setShowMonthPicker(true);}}
-              style={{background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:10,padding:"6px 12px",color:BLANCO,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              style={{background:BLANCO,border:`1.5px solid ${ROSA}33`,borderRadius:10,padding:"6px 12px",color:ROSA,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
               📅 {monthLabel(mk)} ▼
             </button>
           </div>
-          <div style={{display:"flex",gap:6,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.15)"}}>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>VENTAS</div>
-              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(totalVentasMes)}</div>
+
+          {/* Dos balances grandes lado a lado */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            {/* Balance total */}
+            <div style={{background:`linear-gradient(135deg, ${ROSA} 0%, #C2185B 100%)`,borderRadius:16,padding:"14px 14px 12px",color:BLANCO,boxShadow:"0 4px 14px rgba(232,23,93,0.2)"}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.85)",fontWeight:800,textTransform:"uppercase",letterSpacing:0.6,marginBottom:4}}>📊 Total</div>
+              <div style={{fontSize:22,fontWeight:900,letterSpacing:-0.5,color:totalVentasMes-tg>=0?"#C8F7C8":"#FFD4D4",lineHeight:1.1}}>
+                {totalVentasMes-tg>=0?"+":""}{fmtMXN(totalVentasMes-tg)}
+              </div>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",marginTop:4}}>Ventas − todos los gastos</div>
             </div>
-            <div style={{width:1,background:"rgba(255,255,255,0.15)"}}/>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>💵 EFECTIVO</div>
-              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(tgEfectivo)}</div>
+            {/* Balance efectivo (caja) */}
+            <div style={{background:`linear-gradient(135deg, ${VERDE} 0%, #1B5E20 100%)`,borderRadius:16,padding:"14px 14px 12px",color:BLANCO,boxShadow:"0 4px 14px rgba(46,125,50,0.2)"}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.85)",fontWeight:800,textTransform:"uppercase",letterSpacing:0.6,marginBottom:4}}>💵 En caja</div>
+              <div style={{fontSize:22,fontWeight:900,letterSpacing:-0.5,color:totalVentasMes-tgEfectivo>=0?"#C8F7C8":"#FFD4D4",lineHeight:1.1}}>
+                {totalVentasMes-tgEfectivo>=0?"+":""}{fmtMXN(totalVentasMes-tgEfectivo)}
+              </div>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",marginTop:4}}>Ventas − gastos en efectivo</div>
             </div>
-            <div style={{width:1,background:"rgba(255,255,255,0.15)"}}/>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontWeight:700}}>💳 OTROS</div>
-              <div style={{fontSize:15,fontWeight:900,marginTop:2}}>{fmtMXN(tgOtros)}</div>
+          </div>
+
+          {/* Cuatro mini-cards: Ventas, Efectivo, Otros, Recolectado */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div style={{background:BLANCO,borderRadius:12,padding:"10px 12px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`3px solid ${VERDE}`}}>
+              <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800,textTransform:"uppercase",letterSpacing:0.4}}>Ventas</div>
+              <div style={{fontSize:16,fontWeight:900,color:VERDE,marginTop:2}}>{fmtMXN(totalVentasMes)}</div>
+            </div>
+            <div style={{background:BLANCO,borderRadius:12,padding:"10px 12px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`3px solid ${AZUL}`}}>
+              <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800,textTransform:"uppercase",letterSpacing:0.4}}>💰 Recolectado</div>
+              <div style={{fontSize:16,fontWeight:900,color:AZUL,marginTop:2}}>{fmtMXN(totalRecolectadoMes)}</div>
+            </div>
+            <div style={{background:BLANCO,borderRadius:12,padding:"10px 12px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`3px solid ${ROSA}`}}>
+              <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800,textTransform:"uppercase",letterSpacing:0.4}}>💵 Gastos efectivo</div>
+              <div style={{fontSize:16,fontWeight:900,color:ROSA,marginTop:2}}>{fmtMXN(tgEfectivo)}</div>
+            </div>
+            <div style={{background:BLANCO,borderRadius:12,padding:"10px 12px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`3px solid #6A1B9A`}}>
+              <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800,textTransform:"uppercase",letterSpacing:0.4}}>💳 Gastos otros</div>
+              <div style={{fontSize:16,fontWeight:900,color:"#6A1B9A",marginTop:2}}>{fmtMXN(tgOtros)}</div>
             </div>
           </div>
         </div>
