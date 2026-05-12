@@ -1,41 +1,51 @@
 # 🍓 Lady Fresa — Cambios en esta versión
 
-## 🎨 Resumen rediseñado (v3)
+## 🏗️ Reestructura: Resumen con 3 tabs (v4)
 
-El balance del mes ahora es mucho más fácil de leer:
+El Resumen ya no es un scroll infinito con 11 secciones revueltas. Ahora se separa en 3 pestañas y la pantalla "Dashboard" se eliminó (estaba duplicada).
 
-- **Dos balances grandes lado a lado**: rosa (Total = Ventas − Todos los gastos) y verde (En caja = Ventas − Gastos en efectivo). El verde es lo que físicamente debes tener.
-- **4 mini-cards abajo** con barra de color para identificarlas: Ventas (verde), Recolectado (azul), Gastos efectivo (rosa), Gastos otros (morado).
-- **Volvió "Recolectado"** al área de arriba, que se había perdido en la versión anterior.
+### Tab 1 · 📊 Resumen
+La vista de un vistazo. Solo lo importante:
+- Balances grandes (Total + En caja) y mini-cards (Ventas/Recolectado/Efectivo/Otros) siempre arriba
+- Alertas (créditos pendientes, efectivo sin recolectar, faltantes)
+- **NUEVO: Comparación con mes anterior** (ventas y gastos con ▲▼ %)
+- **NUEVO: Top 3 categorías** con barras
+- Botones de acceso rápido a los otros tabs
 
-Más abajo del hero sigue intacta la sección "💳 Gastos por método de pago" con las barras de cada forma, y la sección "💰 Recolecciones del mes" con el detalle por persona.
+### Tab 2 · 💸 Gastos
+Todo el detalle de gastos en un solo lugar:
+- Desglose por método de pago (efectivo / mercado pago / tarjeta / etc) con barras
+- Buscador
+- Filtros: categoría, persona, rango de fechas (colapsable)
+- Indicador de filtros activos con botón "Limpiar"
+- Lista completa de gastos
+
+### Tab 3 · 💰 Cobranza
+Toda la parte de recolecciones:
+- Resumen del efectivo recolectado del mes + faltantes
+- Desglose por persona con barras
+- **NUEVO: Card de pendiente de recolectar** (cuántos días, cuánto efectivo)
+- Notas de ventas (sin límite de 3, ahora muestra todas)
+- **NUEVO: Lista de todas las recolecciones del mes** (tocable para ver detalle)
+
+## 🗑️ Pantalla Dashboard eliminada
+
+Era info duplicada de Resumen y Tendencias. Lo único único era la comparación con el mes anterior, que **se rescató** y ahora vive en el tab de Resumen.
+
+Menú inferior pasó de 5 botones a 4:
+- 📊 Resumen (con 3 tabs)
+- 📉 Tendencias (gráficas de 6 meses)
+- 📅 Historial (otros meses)
+- 💰 Recolectar
 
 ## 💳 Separación efectivo vs tarjeta (sigue igual)
 
-En **Tendencias** (Dashboard): KPIs muestran Ventas, Promedio/día, Gastos efectivo, Gastos otros, Balance total, Balance efectivo. El resumen ejecutivo muestra "Gastos en efectivo", "Gastos con tarjeta / otros" y "Balance efectivo (caja)" como filas separadas.
+Tanto en Resumen como en Tendencias y el Excel.
 
-## 🧹 Estructura limpia
+## 📥 Excel
 
-Estructura final:
-
-```
-ladyfresa/
-├── index.html
-├── vite.config.js
-├── package.json
-├── README.md
-├── INSTRUCCIONES.md
-├── MIGRACION_SUPABASE.sql
-├── CAMBIOS.md
-├── src/
-│   ├── main.jsx
-│   └── App.jsx
-└── public/
-    ├── icon-192.png
-    ├── icon-512.png
-    └── manifest.json
-```
+Sigue exportando todo: gastos completos, ventas, recolecciones — nada se pierde.
 
 ## ✅ Verificado
 
-`vite build` compila sin errores. Cuando subas a GitHub, Vercel hace deploy automático.
+`vite build` compila sin errores.
