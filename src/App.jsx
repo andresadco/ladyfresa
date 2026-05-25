@@ -26,10 +26,14 @@ const CATS=[
 ];
 const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres","Apolo"];
 const PUEDE_VER_NUMEROS=["José Luis","Andres"]; // Solo ellos ven resúmenes y cifras
+const PUEDE_ADMIN_SUC=["Andres","José Luis"]; // Pueden crear/editar/desactivar sucursales
 const PINES={"José Luis":"5555","Andres":"1221"}; // PINs de acceso
 // Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
 const APOLO_REQUIERE_APROBACION=true;
 const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Otro"];
+// Paletas para sucursales nuevas (cuando se agreguen desde el panel)
+const SUC_COLORS=["#E8175D","#1565C0","#2E7D32","#F57F17","#6A1B9A","#00838F","#5D4037","#C62828"];
+const SUC_EMOJIS=["🍓","🍦","🧁","🍰","🥐","🍪","🍨","🍫"];
 
 const todayISO=()=>new Date().toISOString().slice(0,10);
 const fmtMXN=(n)=>n!=null?`$${Number(n).toLocaleString("es-MX")}`:"—";
@@ -47,42 +51,69 @@ const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
-const exportExcel=(gastos,ventas,recolecciones,mk)=>{
+const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)=>{
   const cl=(id)=>CATS.find(c=>c.id===id)?.label??id;
-  const lista=gastos.filter(g=>!mk||monthKey(g.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
+  // Si viene sucursalId, filtra todo a esa sucursal
+  const fSuc=(arr)=>sucursalId?arr.filter(x=>x.sucursal_id===sucursalId):arr;
+  const lista=fSuc(gastos).filter(g=>!mk||monthKey(g.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
   const wsD=XLSX.utils.json_to_sheet(lista.map(g=>({
-    "Fecha":g.fecha,"Concepto":g.concepto,"Categoría":cl(g.cat),
+    "Fecha":g.fecha,"Sucursal":sucName(g.sucursal_id),"Concepto":g.concepto,"Categoría":cl(g.cat),
     "Monto ($)":g.monto,"Forma de Pago":g.forma,"Tipo de Pago":g.tipo_pago||"",
     "Días Crédito":g.dias_credito||"","Vence":g.fecha_vencimiento||"","Pagado":g.pagado?"Sí":"No",
     "Fecha Pago":g.fecha_pago||"","Quién":g.quien||"","Nota":g.nota||"",
   })));
-  wsD["!cols"]=[{wch:12},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:22}];
+  wsD["!cols"]=[{wch:12},{wch:14},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:22}];
   const totC={},totG=lista.reduce((s,g)=>s+num(g.monto),0);
   lista.forEach(g=>{totC[g.cat]=(totC[g.cat]||0)+g.monto;});
   const rRows=CATS.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
     .map(c=>({Categoría:c.label,"Monto ($)":totC[c.id],"% del Total":totG?+((totC[c.id]/totG)*100).toFixed(1):0}));
   rRows.push({Categoría:"TOTAL","Monto ($)":totG,"% del Total":100});
   const wsR=XLSX.utils.json_to_sheet(rRows);
-  const vLista=ventas.filter(v=>!mk||monthKey(v.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Efectivo ($)":v.efectivo,"Registró":v.quien||"","Nota":v.nota||""})));
-  const wsC=XLSX.utils.json_to_sheet(recolecciones.map(r=>({"Fecha":r.fecha_recoleccion,"Monto ($)":r.monto_total,"Quién":r.quien||"","Nota":r.nota||""})));
+  // Por sucursal (sólo si NO se está filtrando por una específica)
+  let wsS=null;
+  if(!sucursalId && sucursales.length>0){
+    const porSuc={};
+    lista.forEach(g=>{const k=sucName(g.sucursal_id);porSuc[k]=(porSuc[k]||0)+num(g.monto);});
+    const sRows=Object.entries(porSuc).sort((a,b)=>b[1]-a[1])
+      .map(([n,v])=>({Sucursal:n,"Gastos ($)":v,"% del Total":totG?+((v/totG)*100).toFixed(1):0}));
+    sRows.push({Sucursal:"TOTAL","Gastos ($)":totG,"% del Total":100});
+    wsS=XLSX.utils.json_to_sheet(sRows);
+  }
+  const vLista=fSuc(ventas).filter(v=>!mk||monthKey(v.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Efectivo ($)":v.efectivo,"Registró":v.quien||"","Nota":v.nota||""})));
+  const rLista=fSuc(recolecciones);
+  const wsC=XLSX.utils.json_to_sheet(rLista.map(r=>({"Fecha":r.fecha_recoleccion,"Sucursal":sucName(r.sucursal_id),"Monto ($)":r.monto_total,"Monto Físico ($)":r.monto_fisico??"","Faltante ($)":r.faltante??"","Quién":r.quien||"","Nota":r.nota||""})));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,wsD,"Gastos");
   XLSX.utils.book_append_sheet(wb,wsR,"Por Categoría");
+  if(wsS)XLSX.utils.book_append_sheet(wb,wsS,"Por Sucursal");
   XLSX.utils.book_append_sheet(wb,wsV,"Ventas");
   XLSX.utils.book_append_sheet(wb,wsC,"Recolecciones");
-  XLSX.writeFile(wb,`LadyFresa_${mk?monthLabel(mk).replace(" ","_"):"Todos"}.xlsx`);
+  const sufijo=sucursalId?`_${sucName(sucursalId).replace(/\s+/g,"_")}`:"";
+  XLSX.writeFile(wb,`LadyFresa_${mk?monthLabel(mk).replace(" ","_"):"Todos"}${sufijo}.xlsx`);
 };
 
-const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null};
-const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:""};
-const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:""};
+const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null,sucursal_id:null};
+const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:"",sucursal_id:null};
+const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
 
 export default function App(){
   const[view,setView]=useState("inicio");
   const[gastos,setGastos]=useState([]);
   const[ventas,setVentas]=useState([]);
   const[recolecciones,setRecolecciones]=useState([]);
+  const[sucursales,setSucursales]=useState([]);
+  // sucursalActiva: null = todas. Persistida en localStorage.
+  const[sucursalActiva,setSucursalActivaState]=useState(()=>{
+    const v=localStorage.getItem("lf_sucursal_activa");
+    return v?parseInt(v):null;
+  });
+  const setSucursalActiva=(id)=>{
+    setSucursalActivaState(id);
+    if(id==null)localStorage.removeItem("lf_sucursal_activa");
+    else localStorage.setItem("lf_sucursal_activa",String(id));
+  };
   const[loading,setLoading]=useState(true);
   const[usuarioActual,setUsuarioActual]=useState(()=>localStorage.getItem("lf_usuario")||null);
   const[selMonth,setSelMonth]=useState(null);
@@ -120,6 +151,7 @@ export default function App(){
   const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});if(data)setGastos(data);};
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
+  const fetchS=async()=>{const{data}=await sb.from("sucursales").select("*").order("orden",{ascending:true});if(data)setSucursales(data);};
 
   // Auto-seleccionar quien=usuarioActual cuando alguien abre el form de recolección
   useEffect(()=>{
@@ -128,13 +160,27 @@ export default function App(){
     }
   },[view,usuarioActual]);
 
+  // Aplicar sucursalActiva como default en los formularios cuando se abren
   useEffect(()=>{
-    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR()]);setLoading(false);})();
+    if(view==="nuevo"&&sucursalActiva!=null){
+      setForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="ventas"&&sucursalActiva!=null){
+      setVForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="recoleccion"&&sucursalActiva!=null){
+      setRForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+  },[view,sucursalActiva]);
+
+  useEffect(()=>{
+    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
     const chV=sb.channel("v-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"ventas"},fetchV).subscribe();
     const chR=sb.channel("r-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"recolecciones"},fetchR).subscribe();
-    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);};
+    const chS=sb.channel("s-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"sucursales"},fetchS).subscribe();
+    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);};
   },[]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
@@ -161,6 +207,7 @@ export default function App(){
   const saveGasto=async()=>{
     if(!form.cat){setCatErr(true);setTimeout(()=>setCatErr(false),2000);return;}
     if(!form.monto||!form.concepto)return;
+    if(!form.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
     // Si Apolo, forzar quien=Apolo
     const quienFinal=usuarioActual==="Apolo"?"Apolo":(form.quien||usuarioActual||"");
     const dias=parseInt(form.dias_credito)||0;
@@ -171,6 +218,7 @@ export default function App(){
       fecha_vencimiento:form.tipo_pago==="credito"&&dias?addDays(form.fecha,dias):null,
       pagado:form.tipo_pago==="contado",
       quien:quienFinal,nota:form.nota,foto:form.foto,
+      sucursal_id:form.sucursal_id,
     };
     let e;
     if(editandoId){({error:e}=await sb.from("gastos").update(payload).eq("id",editandoId));}
@@ -186,7 +234,8 @@ export default function App(){
     setForm({fecha:g.fecha,cat:g.cat,monto:String(g.monto),concepto:g.concepto,
       forma:g.forma||"Efectivo",tipo_pago:g.tipo_pago||"contado",
       dias_credito:g.dias_credito?String(g.dias_credito):"",
-      quien:g.quien||"",nota:g.nota||"",foto:g.foto||null});
+      quien:g.quien||"",nota:g.nota||"",foto:g.foto||null,
+      sucursal_id:g.sucursal_id||null});
     setEditandoId(g.id);
     setView("nuevo");
   };
@@ -216,9 +265,10 @@ export default function App(){
   // ── VENTAS ────────────────────────────────────────────────────────────────
   const saveVenta=async()=>{
     if(!vForm.efectivo)return;
-    const payload={efectivo:parseFloat(vForm.efectivo),quien:vForm.quien,nota:vForm.nota};
-    // Buscar si ya existe por fecha
-    const{data:existing}=await sb.from("ventas").select("id").eq("fecha",vForm.fecha).limit(1);
+    if(!vForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
+    const payload={efectivo:parseFloat(vForm.efectivo),quien:vForm.quien,nota:vForm.nota,sucursal_id:vForm.sucursal_id};
+    // Buscar si ya existe por fecha + sucursal
+    const{data:existing}=await sb.from("ventas").select("id").eq("fecha",vForm.fecha).eq("sucursal_id",vForm.sucursal_id).limit(1);
     let err;
     if(existing&&existing.length>0){
       // Actualizar el existente
@@ -240,9 +290,11 @@ export default function App(){
   const saveRecoleccion=async()=>{
     // Forzar quien=usuarioActual si es Apolo (no toca chips)
     const quienFinal=usuarioActual==="Apolo"?"Apolo":rForm.quien;
+    if(!rForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
     if(!rForm.selDias.length){setError("Selecciona al menos un día para recolectar");setTimeout(()=>setError(null),3000);return;}
     if(!quienFinal){setError("Indica quién recolecta");setTimeout(()=>setError(null),3000);return;}
-    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f);return s+num(v?.efectivo);},0);
+    // Los montos vienen de las ventas de ESA sucursal en esas fechas
+    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+num(v?.efectivo);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
     const requiereAprobacion=quienFinal==="Apolo";
@@ -257,6 +309,7 @@ export default function App(){
       nota:rForm.nota,
       aprobada:requiereAprobacion?false:true,
       aprobada_por:requiereAprobacion?null:"auto",
+      sucursal_id:rForm.sucursal_id,
     };
     const{error:e}=await sb.from("recolecciones").insert([payload]);
     if(e){setError("Error: "+e.message);return;}
@@ -295,9 +348,29 @@ export default function App(){
   };
 
   // ── DATOS DERIVADOS ───────────────────────────────────────────────────────
+  // Filtro por sucursal activa (null = todas)
+  const filtroSuc=(arr)=>sucursalActiva==null?arr:arr.filter(x=>x.sucursal_id===sucursalActiva);
+  const gastosF=filtroSuc(gastos);
+  const ventasF=filtroSuc(ventas);
+  const recoleccionesF=filtroSuc(recolecciones);
+  // Helpers visuales
+  const sucActivaObj=sucursales.find(s=>s.id===sucursalActiva)||null;
+  const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
+  const sucEmoji=(id)=>sucursales.find(s=>s.id===id)?.emoji||"📍";
+  const sucColor=(id)=>sucursales.find(s=>s.id===id)?.color||GRIS_MED;
+  const sucActivasObj=sucursales.filter(s=>s.activa!==false);
+  const sucActivas=sucActivasObj;
+  // Helper: cuando viendo "Todas", devolver label para mostrar; si filtrando, devolver null
+  const mkSucLabel=(sucId)=>{
+    if(sucursalActiva!=null)return null; // viendo solo una, no hace falta etiquetar
+    const s=sucursales.find(x=>x.id===sucId);
+    if(!s)return null;
+    return{nombre:s.nombre,emoji:s.emoji||"📍",color:s.color||GRIS_MED,bg:(s.color||GRIS_MED)+"18"};
+  };
+
   const currentMK=monthKey(todayISO());
-  const months=[...new Set(gastos.map(g=>monthKey(g.fecha)))].filter(Boolean).sort().reverse();
-  const gMes=(mk)=>gastos.filter(g=>monthKey(g.fecha)===mk);
+  const months=[...new Set(gastosF.map(g=>monthKey(g.fecha)))].filter(Boolean).sort().reverse();
+  const gMes=(mk)=>gastosF.filter(g=>monthKey(g.fecha)===mk);
   const totG=(mk)=>gMes(mk).reduce((s,g)=>s+num(g.monto),0);
   const porCat=(mk)=>{const m={};gMes(mk).forEach(g=>{m[g.cat]=(m[g.cat]||0)+g.monto;});return m;};
   const porQuien=(mk)=>{
@@ -305,15 +378,23 @@ export default function App(){
     gMes(mk).filter(g=>filtroQ==="todos"||g.quien===filtroQ).forEach(g=>{const k=g.quien||"Sin asignar";m[k]=(m[k]||0)+g.monto;});
     return m;
   };
-  const diasConVenta=ventas.map(v=>v.fecha);
-  const diasRecolectados=recolecciones.flatMap(r=>r.fechas_cubiertas||[]);
-  const diasPendientes=diasConVenta.filter(d=>!diasRecolectados.includes(d)).sort();
-  const montoPendiente=diasPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
-  const todayG=gastos.filter(g=>g.fecha===todayISO());
+  const diasConVenta=ventasF.map(v=>v.fecha);
+  const diasRecolectados=recoleccionesF.flatMap(r=>r.fechas_cubiertas||[]);
+  // Pendiente por (fecha, sucursal): un día puede estar pendiente en una sucursal y recolectado en otra
+  const ventasFiltradasParaPend=ventasF;
+  // Para cada venta filtrada, ver si su (fecha, sucursal_id) está cubierta por alguna recolección de la misma sucursal
+  const pendVentaIds=ventasFiltradasParaPend.filter(v=>{
+    const recosMismaSuc=recolecciones.filter(r=>r.sucursal_id===v.sucursal_id);
+    return !recosMismaSuc.some(r=>(r.fechas_cubiertas||[]).includes(v.fecha));
+  });
+  // Lista de fechas (únicas) pendientes — usadas en pantallas de recolección cuando hay sucursal activa
+  const diasPendientes=[...new Set(pendVentaIds.map(v=>v.fecha))].sort();
+  const montoPendiente=pendVentaIds.reduce((s,v)=>s+num(v.efectivo),0);
+  const todayG=gastosF.filter(g=>g.fecha===todayISO());
   const todayTG=todayG.reduce((s,g)=>s+num(g.monto),0);
-  const todayV=ventas.find(v=>v.fecha===todayISO());
-  const creditosPendientes=gastos.filter(g=>g.tipo_pago==="credito"&&!g.pagado);
-  const recoleccionesPendientesAprobacion=recolecciones.filter(r=>r.quien==="Apolo"&&!r.aprobada);
+  const todayV=ventasF.find(v=>v.fecha===todayISO());
+  const creditosPendientes=gastosF.filter(g=>g.tipo_pago==="credito"&&!g.pagado);
+  const recoleccionesPendientesAprobacion=recoleccionesF.filter(r=>r.quien==="Apolo"&&!r.aprobada);
   const vencidos=creditosPendientes.filter(g=>g.fecha_vencimiento&&g.fecha_vencimiento<todayISO());
 
   if(loading)return(
@@ -410,6 +491,10 @@ export default function App(){
   if(view==="nuevo")return(
     <Screen title={editandoId?"Editar Gasto":"Nuevo Gasto"}
       onBack={()=>{setEditandoId(null);setForm(FORM0);setView("inicio");}}>
+
+      <FL>📍 Sucursal *</FL>
+      <SucursalChips sucursales={sucActivas} value={form.sucursal_id}
+        onChange={(id)=>setForm(f=>({...f,sucursal_id:id}))}/>
 
       <FL>Fecha</FL>
       <input type="date" style={S.input} value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value}))}/>
@@ -552,9 +637,9 @@ export default function App(){
          </div>
       }
       {error&&<div style={S.errorBanner}>{error}</div>}
-      <button onClick={saveGasto} disabled={!form.monto||!form.concepto}
-        style={{...S.btnPri,opacity:(!form.monto||!form.concepto)?0.4:1,background:saved?VERDE:ROSA}}>
-        {saved?"✅ ¡Guardado!":editandoId?"💾 Guardar cambios":"Guardar Gasto"}
+      <button onClick={saveGasto} disabled={!form.monto||!form.concepto||!form.sucursal_id}
+        style={{...S.btnPri,opacity:(!form.monto||!form.concepto||!form.sucursal_id)?0.4:1,background:saved?VERDE:ROSA}}>
+        {saved?"✅ ¡Guardado!":!form.sucursal_id?"Selecciona una sucursal":editandoId?"💾 Guardar cambios":"Guardar Gasto"}
       </button>
     </Screen>
   );
@@ -565,10 +650,13 @@ export default function App(){
   if(view==="ventas")return(
     <Screen title="Venta de Efectivo" onBack={()=>{setVForm(VFORM0);setView("inicio");}}>
       <div style={{...S.infoBox,marginBottom:16}}>💵 Registra el efectivo del día para cuadrar la recolección.</div>
+      <FL>📍 Sucursal *</FL>
+      <SucursalChips sucursales={sucActivas} value={vForm.sucursal_id}
+        onChange={(id)=>setVForm(f=>({...f,sucursal_id:id}))}/>
       <FL>Fecha</FL>
       <input type="date" style={S.input} value={vForm.fecha} onChange={e=>setVForm(f=>({...f,fecha:e.target.value}))}/>
-      {ventas.find(v=>v.fecha===vForm.fecha)&&(
-        <div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:4}}>⚠️ Ya existe — se sobreescribirá</div>
+      {vForm.sucursal_id&&ventas.find(v=>v.fecha===vForm.fecha&&v.sucursal_id===vForm.sucursal_id)&&(
+        <div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:4}}>⚠️ Ya existe venta de {sucName(vForm.sucursal_id)} el {vForm.fecha} — se sobreescribirá</div>
       )}
       <FL>Efectivo del día ($) *</FL>
       <div style={{position:"relative"}}>
@@ -582,9 +670,9 @@ export default function App(){
       <FL>Nota</FL>
       <textarea style={{...S.input,height:56,resize:"none"}} value={vForm.nota} onChange={e=>setVForm(f=>({...f,nota:e.target.value}))}/>
       {error&&<div style={S.errorBanner}>{error}</div>}
-      <button onClick={saveVenta} disabled={!vForm.efectivo}
-        style={{...S.btnPri,opacity:!vForm.efectivo?0.4:1,background:vSaved?VERDE:ROSA}}>
-        {vSaved?"✅ ¡Guardado!":"Guardar Venta"}
+      <button onClick={saveVenta} disabled={!vForm.efectivo||!vForm.sucursal_id}
+        style={{...S.btnPri,opacity:(!vForm.efectivo||!vForm.sucursal_id)?0.4:1,background:vSaved?VERDE:ROSA}}>
+        {vSaved?"✅ ¡Guardado!":!vForm.sucursal_id?"Selecciona una sucursal":"Guardar Venta"}
       </button>
     </Screen>
   );
@@ -593,179 +681,13 @@ export default function App(){
   // VISTA: RECOLECCIÓN
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="recoleccion")return(
-    <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
-      <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:18,padding:"20px",color:BLANCO,marginBottom:20,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
-        <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>Efectivo pendiente</div>
-        <div style={{fontSize:38,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(montoPendiente)}</div>
-        <div style={{fontSize:12,color:"rgba(255,255,255,0.65)",marginTop:4}}>{diasPendientes.length} días sin recolectar</div>
-      </div>
-
-      {diasPendientes.length===0?<Empty>✅ Todo recolectado</Empty>:(
-        <>
-          <ST>Selecciona días a recolectar</ST>
-          <EditableVentasDias diasPendientes={diasPendientes} ventas={ventas} rForm={rForm} setRForm={setRForm} setSelVentaDia={setSelVentaDia} setView={setView} onVentaUpdated={fetchV}/>
-
-          {rForm.selDias.length>0&&(
-            <div style={{background:VERDE_BG,borderRadius:12,padding:"14px 16px",marginTop:4,border:"1px solid #A5D6A7",marginBottom:4}}>
-              <div style={{fontSize:12,color:VERDE,fontWeight:700}}>Total a recolectar</div>
-              <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0))}</div>
-            </div>
-          )}
-
-          <FL>Fecha de recolección</FL>
-          <input type="date" style={S.input} value={rForm.fecha_recoleccion} onChange={e=>setRForm(f=>({...f,fecha_recoleccion:e.target.value}))}/>
-          <FL>¿Quién recolecta? *</FL>
-          {usuarioActual==="Apolo"
-            ?<div style={{background:"#FFF8E1",borderRadius:12,padding:"12px 14px",border:"2px solid #FFD700",marginBottom:4}}>
-               <div style={{fontSize:13,fontWeight:800,color:"#E65100"}}>🧑 Apolo</div>
-               <div style={{fontSize:11,color:"#795548",marginTop:2}}>Recolección pendiente de aprobación por José Luis</div>
-             </div>
-            :<div style={S.chipRow}>{["José Luis","Jefeson","Apolo"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
-          }
-
-          {/* ── MONTO FÍSICO ── */}
-          {(()=>{
-            const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
-            const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
-            const faltante=montoFisico!=null?Math.max(0,montoDeclarado-montoFisico):0;
-            const sobra=montoFisico!=null?Math.max(0,montoFisico-montoDeclarado):0;
-            return(
-              <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginTop:12,border:"1.5px solid #E0E0E0"}}>
-                <div style={{fontSize:12,fontWeight:800,color:GRIS_MED,marginBottom:10,textTransform:"uppercase",letterSpacing:0.6}}>
-                  💵 Cuadre de efectivo
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                  <div style={{textAlign:"center",flex:1}}>
-                    <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:700,marginBottom:3}}>DECLARADO</div>
-                    <div style={{fontSize:20,fontWeight:900,color:VERDE}}>{fmtMXN(montoDeclarado)}</div>
-                  </div>
-                  <div style={{display:"flex",alignItems:"center",fontSize:18,color:"#CCC"}}>≠</div>
-                  <div style={{textAlign:"center",flex:1}}>
-                    <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:700,marginBottom:3}}>FÍSICO</div>
-                    <div style={{fontSize:20,fontWeight:900,color:montoFisico!=null?(faltante>0?"#E53935":sobra>0?AMBAR:VERDE):GRIS_TEXT}}>
-                      {montoFisico!=null?fmtMXN(montoFisico):"—"}
-                    </div>
-                  </div>
-                </div>
-                <div style={{position:"relative",marginBottom:8}}>
-                  <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:16,fontWeight:900,color:VERDE}}>$</span>
-                  <input type="number" inputMode="decimal"
-                    style={{...S.input,paddingLeft:28,fontSize:20,fontWeight:900,color:VERDE}}
-                    placeholder="Monto físico entregado (opcional)"
-                    value={rForm.monto_fisico}
-                    onChange={e=>setRForm(f=>({...f,monto_fisico:e.target.value}))}/>
-                </div>
-                {faltante>0&&(
-                  <div style={{background:"#FFEBEE",borderRadius:10,padding:"12px 14px",border:"1.5px solid #EF9A9A"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                      <span style={{fontSize:13,fontWeight:800,color:"#E53935"}}>🔴 Faltante</span>
-                      <span style={{fontSize:20,fontWeight:900,color:"#E53935"}}>{fmtMXN(faltante)}</span>
-                    </div>
-                    <div style={{fontSize:11,color:"#C62828",marginBottom:8}}>¿Quién tiene el faltante?</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                      {EQUIPO.map(p=>(
-                        <button key={p} onClick={()=>setRForm(f=>({...f,quien_faltante:p}))}
-                          style={{padding:"6px 12px",borderRadius:16,border:"none",
-                            background:rForm.quien_faltante===p?"#E53935":"#FFCDD2",
-                            color:rForm.quien_faltante===p?BLANCO:"#C62828",
-                            fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                          {p}
-                        </button>
-                      ))}
-                    </div>
-                    {rForm.quien_faltante&&(
-                      <div style={{marginTop:8,fontSize:12,color:"#C62828",fontWeight:600}}>
-                        📋 Se registrará deuda de {fmtMXN(faltante)} a cargo de {rForm.quien_faltante}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {sobra>0&&(
-                  <div style={{background:AMBAR_BG,borderRadius:10,padding:"10px 14px",border:`1.5px solid ${AMBAR}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <span style={{fontSize:13,fontWeight:800,color:AMBAR}}>⚠️ Sobrante</span>
-                      <span style={{fontSize:18,fontWeight:900,color:AMBAR}}>{fmtMXN(sobra)}</span>
-                    </div>
-                    <div style={{fontSize:11,color:AMBAR,marginTop:4}}>Hay más efectivo del declarado — anota en la nota.</div>
-                  </div>
-                )}
-                {montoFisico!=null&&faltante===0&&sobra===0&&(
-                  <div style={{background:VERDE_BG,borderRadius:10,padding:"10px 14px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
-                    <span style={{fontSize:13,fontWeight:800,color:VERDE}}>✅ Cuadre perfecto</span>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          <FL>Nota</FL>
-          <textarea style={{...S.input,height:56,resize:"none"}} value={rForm.nota} onChange={e=>setRForm(f=>({...f,nota:e.target.value}))}/>
-          {error&&<div style={S.errorBanner}>{error}</div>}
-          {(()=>{
-            const noDias=!rForm.selDias.length;
-            const noQuien=!rForm.quien&&usuarioActual!=="Apolo";
-            const blocked=noDias||noQuien;
-            return(
-              <button onClick={saveRecoleccion} disabled={blocked}
-                style={{...S.btnPri,opacity:blocked?0.5:1,background:rSaved?VERDE:ROSA,cursor:blocked?"not-allowed":"pointer"}}>
-                {rSaved?"✅ ¡Recolectado!":noDias?"Selecciona al menos un día":noQuien?"Selecciona quién recolecta":"💰 Confirmar Recolección"}
-              </button>
-            );
-          })()}
-        </>
-      )}
-
-      {recolecciones.length>0&&(
-        <>
-          <ST>Historial de recolecciones</ST>
-          {(()=>{
-            const totalFaltantes=recolecciones.reduce((s,r)=>s+num(r.faltante),0);
-            return(
-              <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-                <div style={{flex:1,minWidth:120,background:VERDE_BG,borderRadius:14,padding:"12px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
-                  <div style={{fontSize:10,color:VERDE,fontWeight:700}}>Total recolectado</div>
-                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recolecciones.reduce((s,r)=>s+num(r.monto_fisico??r.monto_total),0))}</div>
-                </div>
-                <div style={{flex:1,minWidth:120,background:AZUL_BG,borderRadius:14,padding:"12px",border:"1.5px solid #90CAF9",textAlign:"center"}}>
-                  <div style={{fontSize:10,color:AZUL,fontWeight:700}}>Recolecciones</div>
-                  <div style={{fontSize:18,fontWeight:900,color:AZUL}}>{recolecciones.length}</div>
-                </div>
-                {totalFaltantes>0&&(
-                  <div style={{flex:1,minWidth:120,background:"#FFEBEE",borderRadius:14,padding:"12px",border:"1.5px solid #EF9A9A",textAlign:"center"}}>
-                    <div style={{fontSize:10,color:"#E53935",fontWeight:700}}>Faltantes</div>
-                    <div style={{fontSize:18,fontWeight:900,color:"#E53935"}}>{fmtMXN(totalFaltantes)}</div>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-          {recolecciones.map(r=>{
-            const pendAprobacion=r.quien==="Apolo"&&!r.aprobada;
-            return(
-            <button key={r.id} onClick={()=>{setSelRec(r);setView("detalle-recoleccion");}}
-              style={{...S.card,display:"flex",alignItems:"center",gap:12,width:"100%",
-                border:pendAprobacion?"2px solid #FFD700":r.faltante>0?"1.5px solid #EF9A9A":"1.5px solid transparent",
-                background:pendAprobacion?"#FFFDE7":BLANCO,
-                cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
-              <div style={{...S.catEmoji,background:pendAprobacion?"#FFF8E1":r.faltante>0?"#FFEBEE":VERDE_BG,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE}}>
-                {pendAprobacion?"⏳":r.faltante>0?"⚠️":"💰"}
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:14}}>{r.fecha_recoleccion}</div>
-                <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>{r.quien||"—"} · {(r.fechas_cubiertas||[]).length} días</div>
-                {pendAprobacion&&<div style={{fontSize:11,color:"#E65100",fontWeight:700,marginTop:2}}>⏳ Pendiente aprobación de José Luis</div>}
-                {r.faltante>0&&<div style={{fontSize:11,color:"#E53935",fontWeight:700,marginTop:2}}>🔴 Faltante: {fmtMXN(r.faltante)}{r.quien_faltante?` · ${r.quien_faltante}`:""}</div>}
-                {r.nota&&<div style={{fontSize:11,color:"#C0C0C0",fontStyle:"italic",marginTop:2}}>{r.nota}</div>}
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <div style={{fontWeight:900,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(num(r.monto_fisico??r.monto_total))}</div>
-                <span style={{color:"#CCC",fontSize:18}}>›</span>
-              </div>
-            </button>
-          );})}
-        </>
-      )}
-    </Screen>
+    <RecoleccionView
+      rForm={rForm} setRForm={setRForm} ventas={ventas} recolecciones={recolecciones}
+      recoleccionesF={recoleccionesF} sucursales={sucursales} sucActivas={sucActivas}
+      sucursalActiva={sucursalActiva} setView={setView} setSelRec={setSelRec}
+      setSelVentaDia={setSelVentaDia} fetchV={fetchV}
+      usuarioActual={usuarioActual} saveRecoleccion={saveRecoleccion} rSaved={rSaved}
+      error={error} sucName={sucName} sucEmoji={sucEmoji} sucColor={sucColor}/>
   );
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -932,7 +854,7 @@ export default function App(){
         {gastosDia.length>0&&(
           <>
             <ST>Gastos del mismo día · {fmtMXN(totalGDia)}</ST>
-            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
+            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
           </>
         )}
       </Screen>
@@ -1097,7 +1019,7 @@ export default function App(){
     const diffGastos=diff(tg,tgPrev);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
 
         {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
         <div style={{marginBottom:14}}>
@@ -1257,6 +1179,68 @@ export default function App(){
               </>
             )}
 
+            {/* ── COMPARACIÓN ENTRE SUCURSALES (solo viendo "Todas" y con ≥2 sucursales) ── */}
+            {sucursalActiva==null&&sucursales.length>=2&&(()=>{
+              // Calcular por cada sucursal: gastos, ventas, balance, recolectado, pendiente del mes
+              const filas=sucursales.map(s=>{
+                const gMesS=gastos.filter(g=>g.sucursal_id===s.id&&monthKey(g.fecha)===mk);
+                const vMesS=ventas.filter(v=>v.sucursal_id===s.id&&monthKey(v.fecha)===mk);
+                const rMesS=recolecciones.filter(r=>r.sucursal_id===s.id&&monthKey(r.fecha_recoleccion)===mk);
+                const gt=gMesS.reduce((a,g)=>a+num(g.monto),0);
+                const vt=vMesS.reduce((a,v)=>a+num(v.efectivo),0);
+                const rt=rMesS.reduce((a,r)=>a+num(r.monto_fisico??r.monto_total),0);
+                const ge=gMesS.filter(g=>g.forma==="Efectivo").reduce((a,g)=>a+num(g.monto),0);
+                // Pendiente: días con venta en esta sucursal cuya (fecha,suc) no esté cubierta por una reco de la misma suc
+                const recosSucCubre=recolecciones.filter(r=>r.sucursal_id===s.id).flatMap(r=>r.fechas_cubiertas||[]);
+                const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+num(v.efectivo),0);
+                return{s,gt,vt,rt,ge,balance:vt-gt,balanceEf:vt-ge,pend};
+              }).filter(f=>f.gt>0||f.vt>0||f.rt>0); // ocultar sucursales sin movimiento
+              if(filas.length<2)return null;
+              const maxGT=Math.max(...filas.map(f=>f.gt),1);
+              const maxVT=Math.max(...filas.map(f=>f.vt),1);
+              return(
+                <>
+                  <ST>🏪 Comparativa entre sucursales</ST>
+                  <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+                    {filas.map((f,i)=>(
+                      <div key={f.s.id} style={{paddingBottom:i<filas.length-1?12:0,marginBottom:i<filas.length-1?12:0,borderBottom:i<filas.length-1?"1px solid #F0F0F0":"none"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                          <button onClick={()=>setSucursalActiva(f.s.id)}
+                            style={{display:"flex",alignItems:"center",gap:6,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
+                            <span style={{fontSize:18}}>{f.s.emoji}</span>
+                            <span style={{fontSize:14,fontWeight:900,color:f.s.color||GRIS_DARK}}>{f.s.nombre}</span>
+                            <span style={{fontSize:10,color:GRIS_TEXT,marginLeft:4}}>ver →</span>
+                          </button>
+                          <div style={{fontSize:14,fontWeight:900,color:f.balance>=0?VERDE:"#E53935"}}>{f.balance>=0?"+":""}{fmtMXN(f.balance)}</div>
+                        </div>
+                        {/* Barra ventas */}
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+                          <span style={{color:VERDE,fontWeight:700}}>💵 Ventas</span>
+                          <span style={{color:VERDE,fontWeight:800}}>{fmtMXN(f.vt)}</span>
+                        </div>
+                        <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden",marginBottom:6}}>
+                          <div style={{height:"100%",width:`${Math.round((f.vt/maxVT)*100)}%`,background:VERDE,borderRadius:3}}/>
+                        </div>
+                        {/* Barra gastos */}
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+                          <span style={{color:ROSA,fontWeight:700}}>🛒 Gastos</span>
+                          <span style={{color:ROSA,fontWeight:800}}>{fmtMXN(f.gt)}</span>
+                        </div>
+                        <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden",marginBottom:6}}>
+                          <div style={{height:"100%",width:`${Math.round((f.gt/maxGT)*100)}%`,background:ROSA,borderRadius:3}}/>
+                        </div>
+                        {/* Mini KPIs */}
+                        <div style={{display:"flex",gap:8,marginTop:6,fontSize:10,color:GRIS_TEXT}}>
+                          <span>Recolectado: <strong style={{color:AZUL}}>{fmtMXN(f.rt)}</strong></span>
+                          {f.pend>0&&<span>Pendiente: <strong style={{color:AMBAR}}>{fmtMXN(f.pend)}</strong></span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+
             {/* Acceso rápido a tabs */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:8}}>
               <button onClick={()=>setResTab("gastos")}
@@ -1380,7 +1364,7 @@ export default function App(){
 
             {/* Lista de gastos */}
             <ST>📋 Gastos {lista.length>0?`(${lista.length})`:""}</ST>
-            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
+            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
           </>
         )}
 
@@ -1446,12 +1430,17 @@ export default function App(){
             {recoleccionesMes.length>0&&(
               <>
                 <ST>💰 Recolecciones del mes</ST>
-                {recoleccionesMes.sort((a,b)=>b.fecha_recoleccion.localeCompare(a.fecha_recoleccion)).map(r=>(
+                {recoleccionesMes.sort((a,b)=>b.fecha_recoleccion.localeCompare(a.fecha_recoleccion)).map(r=>{
+                  const sl=mkSucLabel(r.sucursal_id);
+                  return(
                   <button key={r.id} onClick={()=>{setSelRec(r);setView("detalle-recoleccion");}}
                     style={{display:"block",width:"100%",textAlign:"left",background:BLANCO,borderRadius:12,padding:"12px 14px",marginBottom:8,boxShadow:"0 2px 6px rgba(0,0,0,0.04)",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div>
-                        <div style={{fontSize:13,fontWeight:800,color:GRIS_DARK}}>{r.fecha_recoleccion} · {r.quien}</div>
+                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                          <div style={{fontSize:13,fontWeight:800,color:GRIS_DARK}}>{r.fecha_recoleccion} · {r.quien}</div>
+                          {sl&&<span style={{fontSize:10,background:sl.bg,color:sl.color,borderRadius:6,padding:"1px 6px",fontWeight:700}}>{sl.emoji} {sl.nombre}</span>}
+                        </div>
                         <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>{(r.fechas_cubiertas||[]).length} día{(r.fechas_cubiertas||[]).length!==1?"s":""} cubierto{(r.fechas_cubiertas||[]).length!==1?"s":""}</div>
                       </div>
                       <div style={{textAlign:"right"}}>
@@ -1460,7 +1449,8 @@ export default function App(){
                       </div>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </>
             )}
 
@@ -1477,7 +1467,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
-      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null)}/>}>
+      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
         <button key={mk} onClick={()=>{setSelMonth(mk);setView("detalle");}} style={S.monthCard}>
           <div>
@@ -1502,7 +1492,7 @@ export default function App(){
     const lista=gMes(mk).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return(
       <Screen title={monthLabel(mk)} onBack={()=>setView("historial")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
         <div style={S.heroCard}>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Total del mes</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(tg)}</div>
@@ -1526,7 +1516,7 @@ export default function App(){
           );
         })}
         <ST>Todos los gastos</ST>
-        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)}/>)}
+        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
       </Screen>
     );
   }
@@ -1569,7 +1559,7 @@ export default function App(){
     const maxAvgDia=Math.max(...avgPorDia,1);
 
     return(
-      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null)} label="📥 Excel"/>}>
+      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)} label="📥 Excel"/>}>
 
         {/* KPIs del mes */}
         <ST>📅 Este mes — {monthLabel(mk)}</ST>
@@ -1719,6 +1709,20 @@ export default function App(){
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: ADMIN DE SUCURSALES (solo Andres / José Luis)
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="admin-sucursales"){
+    if(!PUEDE_ADMIN_SUC.includes(usuarioActual))return null;
+    return(
+      <AdminSucursalesView
+        sucursales={sucursales} setView={setView}
+        sucursalActiva={sucursalActiva} setSucursalActiva={setSucursalActiva}
+        onChange={fetchS}
+        gastos={gastos} ventas={ventas} recolecciones={recolecciones}/>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // VISTA: INICIO
   // ══════════════════════════════════════════════════════════════════════════
   return(
@@ -1752,8 +1756,21 @@ export default function App(){
         </div>
       </div>
 
+      {/* ── BARRA DE SUCURSALES ── */}
+      <SucursalBar
+        sucursales={sucursales} sucursalActiva={sucursalActiva}
+        setSucursalActiva={setSucursalActiva}
+        puedeAdmin={PUEDE_ADMIN_SUC.includes(usuarioActual)}
+        onAdmin={()=>setView("admin-sucursales")}/>
+
       <div style={S.hero}>
         <div style={S.heroDate}>{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"})}</div>
+        {sucActivaObj&&(
+          <div style={{fontSize:13,color:"rgba(255,255,255,0.9)",fontWeight:700,marginBottom:6,display:"inline-flex",alignItems:"center",gap:6,background:"rgba(0,0,0,0.18)",borderRadius:10,padding:"4px 10px"}}>
+            <span>{sucActivaObj.emoji}</span>
+            <span>{sucActivaObj.nombre}</span>
+          </div>
+        )}
         {PUEDE_VER_NUMEROS.includes(usuarioActual)
           ?<>
             <div style={S.heroAmount}>{fmtMXN(todayTG)}</div>
@@ -1796,7 +1813,7 @@ export default function App(){
       {todayG.length>0&&(
         <div style={{padding:"0 16px"}}>
           <ST>Hoy</ST>
-          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)}/>)}
+          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
         </div>
       )}
 
@@ -1807,6 +1824,485 @@ export default function App(){
         <NavBtn icon="💰" label="Recolectar" onClick={()=>setView("recoleccion")}/>
       </nav>
     </div>
+  );
+}
+
+// ── COMPONENTES MULTI-SUCURSAL ────────────────────────────────────────────────
+
+// Selector horizontal de sucursales para usar en formularios
+function SucursalChips({sucursales,value,onChange}){
+  if(!sucursales||sucursales.length===0){
+    return(
+      <div style={{background:"#FFEBEE",borderRadius:12,padding:"10px 14px",fontSize:12,color:"#C62828",fontWeight:600,marginBottom:4}}>
+        ⚠️ No hay sucursales configuradas. Pídele a un admin que cree alguna desde el botón "Sucursales" de la pantalla de inicio.
+      </div>
+    );
+  }
+  return(
+    <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:4}}>
+      {sucursales.map(s=>{
+        const sel=value===s.id;
+        const color=s.color||"#E8175D";
+        return(
+          <button key={s.id} onClick={()=>onChange(s.id)}
+            style={{padding:"10px 14px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",
+              border:`2px solid ${sel?color:"#E0E0E0"}`,
+              background:sel?color:"#F5F5F5",
+              color:sel?"#FFF":"#555",
+              fontSize:13,fontWeight:800,
+              display:"flex",alignItems:"center",gap:6,
+              transform:sel?"scale(1.04)":"scale(1)",
+              transition:"all 0.15s"}}>
+            <span style={{fontSize:16}}>{s.emoji||"📍"}</span>
+            <span>{s.nombre}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Barra horizontal de sucursales en el inicio (incluye "Todas" + botón admin)
+function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin}){
+  const activas=sucursales.filter(s=>s.activa!==false);
+  if(activas.length===0&&!puedeAdmin)return null;
+  return(
+    <div style={{background:"#FFF",padding:"10px 14px",borderBottom:"1px solid #F0F0F0",display:"flex",gap:8,overflowX:"auto",alignItems:"center"}}>
+      <span style={{fontSize:11,fontWeight:800,color:"#888",textTransform:"uppercase",letterSpacing:0.6,flexShrink:0}}>Sucursal:</span>
+      <button onClick={()=>setSucursalActiva(null)}
+        style={{padding:"6px 12px",borderRadius:14,border:sucursalActiva==null?"2px solid #E8175D":"1.5px solid #E0E0E0",
+          background:sucursalActiva==null?"#FFF5F8":"#F5F5F5",
+          color:sucursalActiva==null?"#E8175D":"#555",
+          fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+        🌐 Todas
+      </button>
+      {activas.map(s=>{
+        const sel=sucursalActiva===s.id;
+        const color=s.color||"#E8175D";
+        return(
+          <button key={s.id} onClick={()=>setSucursalActiva(s.id)}
+            style={{padding:"6px 12px",borderRadius:14,border:sel?`2px solid ${color}`:"1.5px solid #E0E0E0",
+              background:sel?color+"18":"#F5F5F5",
+              color:sel?color:"#555",
+              fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap",
+              display:"flex",alignItems:"center",gap:4}}>
+            <span>{s.emoji||"📍"}</span><span>{s.nombre}</span>
+          </button>
+        );
+      })}
+      {puedeAdmin&&(
+        <button onClick={onAdmin}
+          style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
+            fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+          ⚙️ Admin
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Pantalla completa de Recolección con manejo de sucursal
+// Panel admin de sucursales (crear/editar/desactivar/eliminar)
+function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiva,onChange,gastos,ventas,recolecciones}){
+  const[modo,setModo]=useState(null); // null | "nueva" | objeto sucursal en edición
+  const[form,setForm]=useState({nombre:"",emoji:"🍓",color:SUC_COLORS[0],orden:0,activa:true});
+  const[saving,setSaving]=useState(false);
+  const[err,setErr]=useState(null);
+  const[confirmDel,setConfirmDel]=useState(null);
+
+  const empezarNueva=()=>{
+    const usadosColor=new Set(sucursales.map(s=>s.color));
+    const usadosEmoji=new Set(sucursales.map(s=>s.emoji));
+    const colorLibre=SUC_COLORS.find(c=>!usadosColor.has(c))||SUC_COLORS[0];
+    const emojiLibre=SUC_EMOJIS.find(e=>!usadosEmoji.has(e))||SUC_EMOJIS[0];
+    setForm({nombre:"",emoji:emojiLibre,color:colorLibre,orden:(sucursales.length+1),activa:true});
+    setModo("nueva");setErr(null);
+  };
+  const empezarEdit=(s)=>{
+    setForm({nombre:s.nombre,emoji:s.emoji||"🍓",color:s.color||SUC_COLORS[0],orden:s.orden||0,activa:s.activa!==false});
+    setModo(s);setErr(null);
+  };
+  const cancelar=()=>{setModo(null);setErr(null);};
+  const guardar=async()=>{
+    const nombre=(form.nombre||"").trim();
+    if(!nombre){setErr("El nombre no puede estar vacío");return;}
+    setSaving(true);
+    let e;
+    if(modo==="nueva"){
+      ({error:e}=await sb.from("sucursales").insert([{nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}]));
+    } else {
+      ({error:e}=await sb.from("sucursales").update({nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}).eq("id",modo.id));
+    }
+    setSaving(false);
+    if(e){setErr(e.message);return;}
+    await onChange();
+    setModo(null);
+  };
+  const toggleActiva=async(s)=>{
+    await sb.from("sucursales").update({activa:!(s.activa!==false)}).eq("id",s.id);
+    await onChange();
+  };
+  const eliminar=async(s)=>{
+    // Comprobar si tiene movimientos
+    const gN=gastos.filter(g=>g.sucursal_id===s.id).length;
+    const vN=ventas.filter(v=>v.sucursal_id===s.id).length;
+    const rN=recolecciones.filter(r=>r.sucursal_id===s.id).length;
+    if(gN+vN+rN>0){
+      setErr(`No se puede eliminar: tiene ${gN} gastos, ${vN} ventas y ${rN} recolecciones. Desactívala en su lugar.`);
+      setConfirmDel(null);
+      return;
+    }
+    const{error:e}=await sb.from("sucursales").delete().eq("id",s.id);
+    if(e){setErr(e.message);return;}
+    if(sucursalActiva===s.id)setSucursalActiva(null);
+    setConfirmDel(null);
+    await onChange();
+  };
+
+  return(
+    <Screen title="Sucursales" onBack={()=>setView("inicio")}>
+      <div style={{...S.infoBox,marginBottom:14}}>
+        ⚙️ Aquí gestionas las sucursales del negocio. Los movimientos (gastos / ventas / recolecciones) están ligados a una sucursal: si desactivas una, sigue apareciendo en reportes pero no en formularios nuevos.
+      </div>
+
+      {!modo&&(
+        <>
+          <button onClick={empezarNueva}
+            style={{...S.btnPri,marginTop:0,marginBottom:18,background:`linear-gradient(135deg,${ROSA},${ROSA_DARK})`}}>
+            + Nueva sucursal
+          </button>
+
+          {sucursales.length===0?<Empty>No hay sucursales</Empty>:sucursales.map(s=>{
+            const gN=gastos.filter(g=>g.sucursal_id===s.id).length;
+            const vN=ventas.filter(v=>v.sucursal_id===s.id).length;
+            const rN=recolecciones.filter(r=>r.sucursal_id===s.id).length;
+            const totalMov=gN+vN+rN;
+            const activa=s.activa!==false;
+            return(
+              <div key={s.id} style={{...S.card,marginBottom:10,opacity:activa?1:0.55,border:`1.5px solid ${(s.color||GRIS_LIGHT)}33`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:42,height:42,borderRadius:12,background:(s.color||GRIS_LIGHT)+"22",color:s.color||GRIS_MED,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+                    {s.emoji||"📍"}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:900,color:s.color||GRIS_DARK,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      {s.nombre}
+                      {!activa&&<span style={{fontSize:9,background:GRIS_LIGHT,color:GRIS_TEXT,borderRadius:6,padding:"1px 6px",fontWeight:700}}>INACTIVA</span>}
+                    </div>
+                    <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
+                      {gN} gastos · {vN} ventas · {rN} recolecciones
+                    </div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                  <button onClick={()=>empezarEdit(s)}
+                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #E0E0E0",background:BLANCO,color:GRIS_MED,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    ✏️ Editar
+                  </button>
+                  <button onClick={()=>toggleActiva(s)}
+                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:`1.5px solid ${activa?AMBAR:VERDE}`,background:activa?AMBAR_BG:VERDE_BG,color:activa?AMBAR:VERDE,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {activa?"⏸ Desactivar":"▶ Activar"}
+                  </button>
+                  {totalMov===0&&(
+                    confirmDel===s.id
+                      ?<button onClick={()=>eliminar(s)}
+                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"none",background:"#E53935",color:BLANCO,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+                          🗑 ¿Borrar?
+                        </button>
+                      :<button onClick={()=>setConfirmDel(s.id)}
+                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #EF9A9A",background:"#FFEBEE",color:"#E53935",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                          🗑 Eliminar
+                        </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {err&&<div style={S.errorBanner}>{err}</div>}
+        </>
+      )}
+
+      {/* Form de creación / edición */}
+      {modo&&(
+        <div style={{background:BLANCO,borderRadius:16,padding:"16px",boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
+          <div style={{fontSize:14,fontWeight:900,color:GRIS_DARK,marginBottom:12}}>
+            {modo==="nueva"?"➕ Nueva sucursal":`✏️ Editar ${modo.nombre}`}
+          </div>
+
+          <FL>Nombre *</FL>
+          <input style={S.input} placeholder="Ej: Coyoacán, Polanco…"
+            value={form.nombre} onChange={e=>setForm(f=>({...f,nombre:e.target.value}))}/>
+
+          <FL>Emoji</FL>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
+            {SUC_EMOJIS.map(em=>(
+              <button key={em} onClick={()=>setForm(f=>({...f,emoji:em}))}
+                style={{width:42,height:42,borderRadius:10,fontSize:22,cursor:"pointer",fontFamily:"inherit",
+                  border:`2px solid ${form.emoji===em?form.color:"#E0E0E0"}`,
+                  background:form.emoji===em?form.color+"18":"#F5F5F5"}}>
+                {em}
+              </button>
+            ))}
+          </div>
+
+          <FL>Color</FL>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
+            {SUC_COLORS.map(c=>(
+              <button key={c} onClick={()=>setForm(f=>({...f,color:c}))}
+                style={{width:42,height:42,borderRadius:"50%",cursor:"pointer",border:form.color===c?"3px solid #000":"3px solid transparent",
+                  background:c,padding:0,fontFamily:"inherit"}}/>
+            ))}
+          </div>
+
+          <FL>Orden de aparición</FL>
+          <input type="number" inputMode="numeric" style={S.input}
+            placeholder="0" value={form.orden}
+            onChange={e=>setForm(f=>({...f,orden:parseInt(e.target.value)||0}))}/>
+
+          <FL>Estado</FL>
+          <div style={{display:"flex",gap:8,marginBottom:4}}>
+            <button onClick={()=>setForm(f=>({...f,activa:true}))}
+              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
+                border:`2px solid ${form.activa?VERDE:"#E0E0E0"}`,
+                background:form.activa?VERDE_BG:GRIS_LIGHT,
+                color:form.activa?VERDE:GRIS_TEXT}}>
+              ✅ Activa
+            </button>
+            <button onClick={()=>setForm(f=>({...f,activa:false}))}
+              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
+                border:`2px solid ${!form.activa?AMBAR:"#E0E0E0"}`,
+                background:!form.activa?AMBAR_BG:GRIS_LIGHT,
+                color:!form.activa?AMBAR:GRIS_TEXT}}>
+              ⏸ Inactiva
+            </button>
+          </div>
+
+          {/* Vista previa */}
+          <div style={{background:GRIS_LIGHT,borderRadius:12,padding:"14px",marginTop:14,marginBottom:8,textAlign:"center"}}>
+            <div style={{fontSize:10,fontWeight:800,color:GRIS_TEXT,letterSpacing:0.6,marginBottom:8}}>VISTA PREVIA</div>
+            <div style={{display:"inline-flex",alignItems:"center",gap:6,background:form.color+"18",color:form.color,padding:"8px 14px",borderRadius:14,fontWeight:800,fontSize:14,border:`2px solid ${form.color}`}}>
+              <span style={{fontSize:18}}>{form.emoji}</span>
+              <span>{form.nombre||"(sin nombre)"}</span>
+            </div>
+          </div>
+
+          {err&&<div style={S.errorBanner}>{err}</div>}
+
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={cancelar} disabled={saving}
+              style={{flex:1,padding:"14px 0",borderRadius:13,border:"1.5px solid #E0E0E0",background:GRIS_LIGHT,color:GRIS_MED,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancelar
+            </button>
+            <button onClick={guardar} disabled={saving||!form.nombre.trim()}
+              style={{flex:1,padding:"14px 0",borderRadius:13,border:"none",background:saving?GRIS_MED:form.color,color:BLANCO,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit",opacity:!form.nombre.trim()?0.4:1}}>
+              {saving?"⏳ Guardando…":"💾 Guardar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Screen>
+  );
+}
+
+function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,sucursales,sucActivas,sucursalActiva,setView,setSelRec,setSelVentaDia,fetchV,usuarioActual,saveRecoleccion,rSaved,error,sucName,sucEmoji,sucColor}){
+  // Sucursal del formulario manda. Si no hay, requerimos al usuario que elija.
+  const sucForm=rForm.sucursal_id;
+  // Ventas y recolecciones de la sucursal del form:
+  const ventasSuc=sucForm?ventas.filter(v=>v.sucursal_id===sucForm):[];
+  const recosSuc=sucForm?recolecciones.filter(r=>r.sucursal_id===sucForm):[];
+  const diasCubiertos=recosSuc.flatMap(r=>r.fechas_cubiertas||[]);
+  const diasPendientesSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).map(v=>v.fecha).sort();
+  const montoPendienteSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).reduce((s,v)=>s+num(v.efectivo),0);
+
+  return(
+    <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
+      <FL>📍 Sucursal a recolectar *</FL>
+      <SucursalChips sucursales={sucActivas} value={rForm.sucursal_id}
+        onChange={(id)=>setRForm(f=>({...f,sucursal_id:id,selDias:[]}))}/>
+
+      {!sucForm?(
+        <div style={{...S.infoBox,marginTop:14}}>👆 Elige la sucursal cuyo efectivo vas a recolectar. Cada sucursal lleva su efectivo por separado.</div>
+      ):(
+        <>
+          <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:18,padding:"20px",color:BLANCO,marginTop:16,marginBottom:20,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>Efectivo pendiente en {sucEmoji(sucForm)} {sucName(sucForm)}</div>
+            <div style={{fontSize:38,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(montoPendienteSuc)}</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.65)",marginTop:4}}>{diasPendientesSuc.length} días sin recolectar</div>
+          </div>
+
+          {diasPendientesSuc.length===0?<Empty>✅ Todo recolectado en {sucName(sucForm)}</Empty>:(
+            <>
+              <ST>Selecciona días a recolectar</ST>
+              <EditableVentasDias diasPendientes={diasPendientesSuc} ventas={ventasSuc} rForm={rForm} setRForm={setRForm} setSelVentaDia={setSelVentaDia} setView={setView} onVentaUpdated={fetchV} sucursalId={sucForm}/>
+
+              {rForm.selDias.length>0&&(
+                <div style={{background:VERDE_BG,borderRadius:12,padding:"14px 16px",marginTop:4,border:"1px solid #A5D6A7",marginBottom:4}}>
+                  <div style={{fontSize:12,color:VERDE,fontWeight:700}}>Total a recolectar</div>
+                  <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0))}</div>
+                </div>
+              )}
+
+              <FL>Fecha de recolección</FL>
+              <input type="date" style={S.input} value={rForm.fecha_recoleccion} onChange={e=>setRForm(f=>({...f,fecha_recoleccion:e.target.value}))}/>
+              <FL>¿Quién recolecta? *</FL>
+              {usuarioActual==="Apolo"
+                ?<div style={{background:"#FFF8E1",borderRadius:12,padding:"12px 14px",border:"2px solid #FFD700",marginBottom:4}}>
+                   <div style={{fontSize:13,fontWeight:800,color:"#E65100"}}>🧑 Apolo</div>
+                   <div style={{fontSize:11,color:"#795548",marginTop:2}}>Recolección pendiente de aprobación por José Luis</div>
+                 </div>
+                :<div style={S.chipRow}>{["José Luis","Jefeson","Apolo"].map(o=><Chip key={o} active={rForm.quien===o} color={VERDE} onClick={()=>setRForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+              }
+
+              {/* ── MONTO FÍSICO ── */}
+              {(()=>{
+                const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
+                const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
+                const faltante=montoFisico!=null?Math.max(0,montoDeclarado-montoFisico):0;
+                const sobra=montoFisico!=null?Math.max(0,montoFisico-montoDeclarado):0;
+                return(
+                  <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginTop:12,border:"1.5px solid #E0E0E0"}}>
+                    <div style={{fontSize:12,fontWeight:800,color:GRIS_MED,marginBottom:10,textTransform:"uppercase",letterSpacing:0.6}}>
+                      💵 Cuadre de efectivo
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                      <div style={{textAlign:"center",flex:1}}>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:700,marginBottom:3}}>DECLARADO</div>
+                        <div style={{fontSize:20,fontWeight:900,color:VERDE}}>{fmtMXN(montoDeclarado)}</div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",fontSize:18,color:"#CCC"}}>≠</div>
+                      <div style={{textAlign:"center",flex:1}}>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:700,marginBottom:3}}>FÍSICO</div>
+                        <div style={{fontSize:20,fontWeight:900,color:montoFisico!=null?(faltante>0?"#E53935":sobra>0?AMBAR:VERDE):GRIS_TEXT}}>
+                          {montoFisico!=null?fmtMXN(montoFisico):"—"}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{position:"relative",marginBottom:8}}>
+                      <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:16,fontWeight:900,color:VERDE}}>$</span>
+                      <input type="number" inputMode="decimal"
+                        style={{...S.input,paddingLeft:28,fontSize:20,fontWeight:900,color:VERDE}}
+                        placeholder="Monto físico entregado (opcional)"
+                        value={rForm.monto_fisico}
+                        onChange={e=>setRForm(f=>({...f,monto_fisico:e.target.value}))}/>
+                    </div>
+                    {faltante>0&&(
+                      <div style={{background:"#FFEBEE",borderRadius:10,padding:"12px 14px",border:"1.5px solid #EF9A9A"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                          <span style={{fontSize:13,fontWeight:800,color:"#E53935"}}>🔴 Faltante</span>
+                          <span style={{fontSize:20,fontWeight:900,color:"#E53935"}}>{fmtMXN(faltante)}</span>
+                        </div>
+                        <div style={{fontSize:11,color:"#C62828",marginBottom:8}}>¿Quién tiene el faltante?</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                          {EQUIPO.map(p=>(
+                            <button key={p} onClick={()=>setRForm(f=>({...f,quien_faltante:p}))}
+                              style={{padding:"6px 12px",borderRadius:16,border:"none",
+                                background:rForm.quien_faltante===p?"#E53935":"#FFCDD2",
+                                color:rForm.quien_faltante===p?BLANCO:"#C62828",
+                                fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                              {p}
+                            </button>
+                          ))}
+                        </div>
+                        {rForm.quien_faltante&&(
+                          <div style={{marginTop:8,fontSize:12,color:"#C62828",fontWeight:600}}>
+                            📋 Se registrará deuda de {fmtMXN(faltante)} a cargo de {rForm.quien_faltante}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {sobra>0&&(
+                      <div style={{background:AMBAR_BG,borderRadius:10,padding:"10px 14px",border:`1.5px solid ${AMBAR}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <span style={{fontSize:13,fontWeight:800,color:AMBAR}}>⚠️ Sobrante</span>
+                          <span style={{fontSize:18,fontWeight:900,color:AMBAR}}>{fmtMXN(sobra)}</span>
+                        </div>
+                        <div style={{fontSize:11,color:AMBAR,marginTop:4}}>Hay más efectivo del declarado — anota en la nota.</div>
+                      </div>
+                    )}
+                    {montoFisico!=null&&faltante===0&&sobra===0&&(
+                      <div style={{background:VERDE_BG,borderRadius:10,padding:"10px 14px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
+                        <span style={{fontSize:13,fontWeight:800,color:VERDE}}>✅ Cuadre perfecto</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <FL>Nota</FL>
+              <textarea style={{...S.input,height:56,resize:"none"}} value={rForm.nota} onChange={e=>setRForm(f=>({...f,nota:e.target.value}))}/>
+              {error&&<div style={S.errorBanner}>{error}</div>}
+              {(()=>{
+                const noDias=!rForm.selDias.length;
+                const noQuien=!rForm.quien&&usuarioActual!=="Apolo";
+                const blocked=noDias||noQuien;
+                return(
+                  <button onClick={saveRecoleccion} disabled={blocked}
+                    style={{...S.btnPri,opacity:blocked?0.5:1,background:rSaved?VERDE:ROSA,cursor:blocked?"not-allowed":"pointer"}}>
+                    {rSaved?"✅ ¡Recolectado!":noDias?"Selecciona al menos un día":noQuien?"Selecciona quién recolecta":"💰 Confirmar Recolección"}
+                  </button>
+                );
+              })()}
+            </>
+          )}
+        </>
+      )}
+
+      {/* Historial respeta filtro de sucursal activa */}
+      {recoleccionesF.length>0&&(
+        <>
+          <ST>Historial de recolecciones{sucursalActiva!=null?` · ${sucName(sucursalActiva)}`:""}</ST>
+          {(()=>{
+            const totalFaltantes=recoleccionesF.reduce((s,r)=>s+num(r.faltante),0);
+            return(
+              <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:120,background:VERDE_BG,borderRadius:14,padding:"12px",border:"1.5px solid #A5D6A7",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:VERDE,fontWeight:700}}>Total recolectado</div>
+                  <div style={{fontSize:18,fontWeight:900,color:VERDE}}>{fmtMXN(recoleccionesF.reduce((s,r)=>s+num(r.monto_fisico??r.monto_total),0))}</div>
+                </div>
+                <div style={{flex:1,minWidth:120,background:AZUL_BG,borderRadius:14,padding:"12px",border:"1.5px solid #90CAF9",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:AZUL,fontWeight:700}}>Recolecciones</div>
+                  <div style={{fontSize:18,fontWeight:900,color:AZUL}}>{recoleccionesF.length}</div>
+                </div>
+                {totalFaltantes>0&&(
+                  <div style={{flex:1,minWidth:120,background:"#FFEBEE",borderRadius:14,padding:"12px",border:"1.5px solid #EF9A9A",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:"#E53935",fontWeight:700}}>Faltantes</div>
+                    <div style={{fontSize:18,fontWeight:900,color:"#E53935"}}>{fmtMXN(totalFaltantes)}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {recoleccionesF.map(r=>{
+            const pendAprobacion=r.quien==="Apolo"&&!r.aprobada;
+            const mostrarSuc=sucursalActiva==null;
+            return(
+            <button key={r.id} onClick={()=>{setSelRec(r);setView("detalle-recoleccion");}}
+              style={{...S.card,display:"flex",alignItems:"center",gap:12,width:"100%",
+                border:pendAprobacion?"2px solid #FFD700":r.faltante>0?"1.5px solid #EF9A9A":"1.5px solid transparent",
+                background:pendAprobacion?"#FFFDE7":BLANCO,
+                cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:8}}>
+              <div style={{...S.catEmoji,background:pendAprobacion?"#FFF8E1":r.faltante>0?"#FFEBEE":VERDE_BG,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE}}>
+                {pendAprobacion?"⏳":r.faltante>0?"⚠️":"💰"}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <div style={{fontWeight:700,fontSize:14}}>{r.fecha_recoleccion}</div>
+                  {mostrarSuc&&r.sucursal_id&&<span style={{fontSize:10,background:sucColor(r.sucursal_id)+"18",color:sucColor(r.sucursal_id),borderRadius:6,padding:"1px 6px",fontWeight:700}}>{sucEmoji(r.sucursal_id)} {sucName(r.sucursal_id)}</span>}
+                </div>
+                <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>{r.quien||"—"} · {(r.fechas_cubiertas||[]).length} días</div>
+                {pendAprobacion&&<div style={{fontSize:11,color:"#E65100",fontWeight:700,marginTop:2}}>⏳ Pendiente aprobación de José Luis</div>}
+                {r.faltante>0&&<div style={{fontSize:11,color:"#E53935",fontWeight:700,marginTop:2}}>🔴 Faltante: {fmtMXN(r.faltante)}{r.quien_faltante?` · ${r.quien_faltante}`:""}</div>}
+                {r.nota&&<div style={{fontSize:11,color:"#C0C0C0",fontStyle:"italic",marginTop:2}}>{r.nota}</div>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <div style={{fontWeight:900,color:pendAprobacion?"#E65100":r.faltante>0?"#E53935":VERDE,fontSize:15}}>{fmtMXN(num(r.monto_fisico??r.monto_total))}</div>
+                <span style={{color:"#CCC",fontSize:18}}>›</span>
+              </div>
+            </button>
+          );})}
+        </>
+      )}
+    </Screen>
   );
 }
 
@@ -1824,7 +2320,7 @@ function Screen({title,onBack,action,children}){
   );
 }
 
-function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true}){
+function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursalLabel=null}){
   const cat=CATS.find(c=>c.id===g.cat)||CATS[10];
   const[confirm,setConfirm]=useState(false);
   const[showFoto,setShowFoto]=useState(false);
@@ -1837,6 +2333,7 @@ function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true}){
         <div style={{flex:1,minWidth:0}}>
           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
             <span style={{fontWeight:700,fontSize:14}}>{g.concepto}</span>
+            {sucursalLabel&&<span style={{fontSize:10,background:sucursalLabel.bg,color:sucursalLabel.color,borderRadius:6,padding:"1px 6px",fontWeight:700}}>{sucursalLabel.emoji} {sucursalLabel.nombre}</span>}
             {inusual&&<span style={{fontSize:10,background:AMBAR_BG,color:AMBAR,borderRadius:6,padding:"1px 6px",fontWeight:700}}>⚠️ alto</span>}
             {isPendiente&&<span style={{fontSize:10,background:isVencido?"#FFEBEE":AMBAR_BG,color:isVencido?"#E53935":AMBAR,borderRadius:6,padding:"1px 6px",fontWeight:700}}>{isVencido?"🔴 vencido":"⏳ crédito"}</span>}
             {g.pagado&&g.tipo_pago==="credito"&&<span style={{fontSize:10,background:VERDE_BG,color:VERDE,borderRadius:6,padding:"1px 6px",fontWeight:700}}>✓ pagado</span>}
@@ -1929,7 +2426,7 @@ const S={
 };
 
 // ── EDITABLE VENTAS EN CUADRE ─────────────────────────────────────────────────
-function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia,setView,onVentaUpdated}){
+function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia,setView,onVentaUpdated,sucursalId=null}){
   const[editando,setEditando]=useState(null); // fecha
   const[nuevoMonto,setNuevoMonto]=useState("");
   const[nuevoQuien,setNuevoQuien]=useState("");
@@ -1939,11 +2436,16 @@ function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia
   const guardarEdicion=async(fecha)=>{
     if(!nuevoMonto)return;
     setSaving(true);
-    const{data:existing}=await sb.from("ventas").select("id").eq("fecha",fecha).limit(1);
+    // Buscar venta existente para esta fecha+sucursal
+    let q=sb.from("ventas").select("id").eq("fecha",fecha);
+    if(sucursalId)q=q.eq("sucursal_id",sucursalId);
+    const{data:existing}=await q.limit(1);
     if(existing&&existing.length>0){
       await sb.from("ventas").update({efectivo:parseFloat(nuevoMonto),quien:nuevoQuien||undefined}).eq("id",existing[0].id);
     } else {
-      await sb.from("ventas").insert([{fecha,efectivo:parseFloat(nuevoMonto),quien:nuevoQuien}]);
+      const payload={fecha,efectivo:parseFloat(nuevoMonto),quien:nuevoQuien};
+      if(sucursalId)payload.sucursal_id=sucursalId;
+      await sb.from("ventas").insert([payload]);
     }
     await onVentaUpdated();
     setSaving(false);

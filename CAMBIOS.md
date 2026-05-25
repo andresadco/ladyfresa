@@ -1,50 +1,58 @@
-# 🍓 Lady Fresa — Cambios en esta versión
+# 🍓 Lady Fresa — Multi-sucursal (v5)
 
-## 🏗️ Reestructura: Resumen con 3 tabs (v4)
+## 🎯 Resumen
 
-El Resumen ya no es un scroll infinito con 11 secciones revueltas. Ahora se separa en 3 pestañas y la pantalla "Dashboard" se eliminó (estaba duplicada).
+La app ahora maneja **varias sucursales**. Cada gasto, venta y recolección está ligado a una sucursal. Hay panel admin para crear/editar/desactivar, filtro global, formularios con selector y comparación entre sucursales en el Resumen.
 
-### Tab 1 · 📊 Resumen
-La vista de un vistazo. Solo lo importante:
-- Balances grandes (Total + En caja) y mini-cards (Ventas/Recolectado/Efectivo/Otros) siempre arriba
-- Alertas (créditos pendientes, efectivo sin recolectar, faltantes)
-- **NUEVO: Comparación con mes anterior** (ventas y gastos con ▲▼ %)
-- **NUEVO: Top 3 categorías** con barras
-- Botones de acceso rápido a los otros tabs
+## 🗄️ Migración de base de datos (HACER UNA VEZ)
 
-### Tab 2 · 💸 Gastos
-Todo el detalle de gastos en un solo lugar:
-- Desglose por método de pago (efectivo / mercado pago / tarjeta / etc) con barras
-- Buscador
-- Filtros: categoría, persona, rango de fechas (colapsable)
-- Indicador de filtros activos con botón "Limpiar"
-- Lista completa de gastos
+Antes de subir el código nuevo, ejecuta en **Supabase → SQL Editor**:
+```
+MIGRACION_SUCURSALES.sql
+```
+Esto crea la tabla `sucursales`, agrega `sucursal_id` a `gastos` / `ventas` / `recolecciones`, hace backfill (todo lo existente queda en "Balbuena") y cambia el UNIQUE de ventas a `(fecha, sucursal_id)` para que cada sucursal pueda registrar su venta diaria sin pisarse.
 
-### Tab 3 · 💰 Cobranza
-Toda la parte de recolecciones:
-- Resumen del efectivo recolectado del mes + faltantes
-- Desglose por persona con barras
-- **NUEVO: Card de pendiente de recolectar** (cuántos días, cuánto efectivo)
-- Notas de ventas (sin límite de 3, ahora muestra todas)
-- **NUEVO: Lista de todas las recolecciones del mes** (tocable para ver detalle)
+Verifica con:
+```sql
+SELECT * FROM sucursales ORDER BY orden;
+SELECT count(*) FROM gastos WHERE sucursal_id IS NULL;  -- debe ser 0
+```
 
-## 🗑️ Pantalla Dashboard eliminada
+## 🆕 Qué cambia en la app
 
-Era info duplicada de Resumen y Tendencias. Lo único único era la comparación con el mes anterior, que **se rescató** y ahora vive en el tab de Resumen.
+### Pantalla de inicio
+Aparece una **barra de sucursales** debajo del header con chips: `🌐 Todas | 🍓 Balbuena | 🍦 Del Valle | … | ⚙️ Admin`. El chip seleccionado se persiste en localStorage. En el hero del usuario admin se muestra un badge con la sucursal activa.
 
-Menú inferior pasó de 5 botones a 4:
-- 📊 Resumen (con 3 tabs)
-- 📉 Tendencias (gráficas de 6 meses)
-- 📅 Historial (otros meses)
-- 💰 Recolectar
+### Formularios (Gasto / Venta / Recolección)
+Cada formulario tiene arriba un selector **"📍 Sucursal"** con chips de colores. El botón "Guardar" se deshabilita hasta que elijas una. Si tienes una sucursal activa global, el formulario llega ya rellenado con ella; siempre la puedes cambiar.
 
-## 💳 Separación efectivo vs tarjeta (sigue igual)
+### Recolección
+Ahora **requiere elegir sucursal primero**. Solo se muestran los días pendientes de **esa** sucursal. Cada sucursal lleva su propio efectivo: la pantalla calcula pendientes según `(fecha, sucursal)`, no por fecha sola.
 
-Tanto en Resumen como en Tendencias y el Excel.
+### Resumen
+- Las cards y barras siguen funcionando, pero filtran por la sucursal activa.
+- Cuando estás en "🌐 Todas" y hay 2+ sucursales con movimientos, aparece una nueva sección **"🏪 Comparativa entre sucursales"** con barras de Ventas/Gastos/Balance/Recolectado/Pendiente por sucursal. Cada fila es clickeable para entrar al detalle de esa sucursal.
 
-## 📥 Excel
+### Tendencias e Historial
+También respetan el filtro de sucursal activa.
 
-Sigue exportando todo: gastos completos, ventas, recolecciones — nada se pierde.
+### Listados
+- Cada `GastoRow` muestra un badge con la sucursal cuando estás viendo "Todas" (no aparece cuando ya estás filtrado a una).
+- Lo mismo aplica a las recolecciones en el Resumen y en la pantalla de Recolección.
+
+### Excel
+Cada hoja del Excel (Gastos / Ventas / Recolecciones) ahora tiene la columna **Sucursal**. Cuando estás viendo "Todas", el archivo incluye una hoja extra **"Por Sucursal"** con totales de gastos por sucursal y porcentajes. El nombre del archivo incluye el sufijo de la sucursal cuando filtras una específica.
+
+### Panel admin (solo Andres y José Luis)
+Botón **⚙️ Admin** al final de la barra de sucursales. Permite:
+- ➕ Crear nuevas sucursales (nombre, emoji, color, orden, estado)
+- ✏️ Editar las existentes
+- ⏸ Desactivar (siguen apareciendo en reportes pero no en formularios de captura nuevos)
+- 🗑 Eliminar (solo si no tiene movimientos asociados)
+
+## ⚙️ Detalle técnico de la lógica de pendientes
+
+El cálculo del efectivo pendiente cambió de forma sutil: antes era "cualquier fecha con venta que no esté en `fechas_cubiertas` de alguna recolección". Ahora es **por (fecha, sucursal_id)**, es decir: una venta del 5 de mayo en Balbuena está pendiente solo si no hay una recolección de Balbuena que cubra ese 5 de mayo. Si en Del Valle hay una recolección del 5 de mayo no afecta a Balbuena.
 
 ## ✅ Verificado
 
