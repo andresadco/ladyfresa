@@ -11,9 +11,7 @@ const GRIS_DARK="#1A1A1A",GRIS_MED="#4A4A4A",GRIS_LIGHT="#F5F5F5",GRIS_TEXT="#88
 const VERDE="#2E7D32",VERDE_BG="#E8F5E9",AMBAR="#F57F17",AMBAR_BG="#FFF8E1";
 const AZUL="#1565C0",AZUL_BG="#E3F2FD";
 
-// Categorías por defecto (fallback). El estado real se lee de Supabase tabla `categorias`.
-// Si Supabase falla o tarda, la app usa estas mientras tanto.
-const CATS_DEFAULT=[
+const CATS=[
   {id:"fruta",label:"Fruta Fresca",emoji:"🍓",color:"#E8175D"},
   {id:"lacteos",label:"Lácteos y Cremas",emoji:"🥛",color:"#1565C0"},
   {id:"chocolate",label:"Chocolate",emoji:"🍫",color:"#4E342E"},
@@ -26,12 +24,9 @@ const CATS_DEFAULT=[
   {id:"limpieza",label:"Limpieza",emoji:"🧹",color:"#2E7D32"},
   {id:"otros",label:"Otros",emoji:"📦",color:"#546E7A"},
 ];
-// Convertir filas de tabla `categorias` (Supabase) al shape interno {id,label,emoji,color}
-const catRowToObj=(r)=>({id:r.cat_key,label:r.nombre,emoji:r.emoji||"📦",color:r.color||"#546E7A",sucursal_id:r.sucursal_id,_dbId:r.id,activa:r.activa!==false,orden:r.orden||0});
 const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres","Apolo"];
 const PUEDE_VER_NUMEROS=["José Luis","Andres"]; // Solo ellos ven resúmenes y cifras
 const PUEDE_ADMIN_SUC=["Andres","José Luis"]; // Pueden crear/editar/desactivar sucursales
-const PUEDE_ADMIN_CAT=["Andres","José Luis"]; // Pueden crear/editar/desactivar categorías
 const PINES={"José Luis":"5555","Andres":"1221"}; // PINs de acceso
 // Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
 const APOLO_REQUIERE_APROBACION=true;
@@ -56,8 +51,8 @@ const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
-const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT)=>{
-  const cl=(id)=>cats.find(c=>c.id===id)?.label??id;
+const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)=>{
+  const cl=(id)=>CATS.find(c=>c.id===id)?.label??id;
   const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
   // Si viene sucursalId, filtra todo a esa sucursal
   const fSuc=(arr)=>sucursalId?arr.filter(x=>x.sucursal_id===sucursalId):arr;
@@ -71,7 +66,7 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
   wsD["!cols"]=[{wch:12},{wch:14},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:22}];
   const totC={},totG=lista.reduce((s,g)=>s+num(g.monto),0);
   lista.forEach(g=>{totC[g.cat]=(totC[g.cat]||0)+g.monto;});
-  const rRows=cats.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
+  const rRows=CATS.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
     .map(c=>({Categoría:c.label,"Monto ($)":totC[c.id],"% del Total":totG?+((totC[c.id]/totG)*100).toFixed(1):0}));
   rRows.push({Categoría:"TOTAL","Monto ($)":totG,"% del Total":100});
   const wsR=XLSX.utils.json_to_sheet(rRows);
@@ -109,7 +104,6 @@ export default function App(){
   const[ventas,setVentas]=useState([]);
   const[recolecciones,setRecolecciones]=useState([]);
   const[sucursales,setSucursales]=useState([]);
-  const[cats,setCats]=useState(CATS_DEFAULT);
   // sucursalActiva: null = todas. Persistida en localStorage.
   const[sucursalActiva,setSucursalActivaState]=useState(()=>{
     const v=localStorage.getItem("lf_sucursal_activa");
@@ -158,10 +152,6 @@ export default function App(){
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
   const fetchS=async()=>{const{data}=await sb.from("sucursales").select("*").order("orden",{ascending:true});if(data)setSucursales(data);};
-  const fetchC=async()=>{
-    const{data}=await sb.from("categorias").select("*").order("orden",{ascending:true});
-    if(data&&data.length>0)setCats(data.map(catRowToObj));
-  };
 
   // Auto-seleccionar quien=usuarioActual cuando alguien abre el form de recolección
   useEffect(()=>{
@@ -184,14 +174,13 @@ export default function App(){
   },[view,sucursalActiva]);
 
   useEffect(()=>{
-    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC()]);setLoading(false);})();
+    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
     const chV=sb.channel("v-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"ventas"},fetchV).subscribe();
     const chR=sb.channel("r-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"recolecciones"},fetchR).subscribe();
     const chS=sb.channel("s-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"sucursales"},fetchS).subscribe();
-    const chC=sb.channel("c-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"categorias"},fetchC).subscribe();
-    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);};
+    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);};
   },[]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
@@ -212,7 +201,7 @@ export default function App(){
 
   // ── GASTOS ────────────────────────────────────────────────────────────────
   const promedios={};
-  cats.forEach(c=>{const ms=gastos.filter(g=>g.cat===c.id).map(g=>g.monto);if(ms.length>1)promedios[c.id]=ms.reduce((s,m)=>s+m,0)/ms.length;});
+  CATS.forEach(c=>{const ms=gastos.filter(g=>g.cat===c.id).map(g=>g.monto);if(ms.length>1)promedios[c.id]=ms.reduce((s,m)=>s+m,0)/ms.length;});
   const esInusual=(cat,monto)=>promedios[cat]&&monto>promedios[cat]*2.5;
 
   const saveGasto=async()=>{
@@ -512,7 +501,7 @@ export default function App(){
 
       <FL>{catErr?<span style={{color:"#E53935"}}>Categoría * ← elige una</span>:"Categoría *"}</FL>
       <div style={{...S.catGrid,border:catErr?"2px solid #E53935":"none",borderRadius:14,padding:catErr?6:0}}>
-        {cats.filter(c=>c.id===form.cat||(c.activa!==false&&(c.sucursal_id==null||c.sucursal_id===form.sucursal_id))).map(c=>(
+        {CATS.map(c=>(
           <button key={c.id} onClick={()=>{setForm(f=>({...f,cat:c.id}));setCatErr(false);}}
             style={{...S.catBtn,background:form.cat===c.id?c.color:GRIS_LIGHT,
               color:form.cat===c.id?BLANCO:GRIS_MED,
@@ -865,7 +854,7 @@ export default function App(){
         {gastosDia.length>0&&(
           <>
             <ST>Gastos del mismo día · {fmtMXN(totalGDia)}</ST>
-            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
+            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
           </>
         )}
       </Screen>
@@ -923,7 +912,7 @@ export default function App(){
                 <div>
                   <div style={{fontWeight:800,fontSize:15}}>{g.concepto}</div>
                   <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
-                    {g.fecha} · {g.quien||"—"} · {cats.find(c=>c.id===g.cat)?.emoji} {cats.find(c=>c.id===g.cat)?.label}
+                    {g.fecha} · {g.quien||"—"} · {CATS.find(c=>c.id===g.cat)?.emoji} {CATS.find(c=>c.id===g.cat)?.label}
                   </div>
                 </div>
                 <div style={{fontWeight:900,color:isVencido?"#E53935":AMBAR,fontSize:18}}>{fmtMXN(g.monto)}</div>
@@ -992,7 +981,7 @@ export default function App(){
     // Desglose detallado por forma de pago (para tarjeta/Mercado Pago/etc)
     const porForma={};listaCompleta.forEach(g=>{const k=g.forma||"Sin método";porForma[k]=(porForma[k]||0)+g.monto;});
     // Categorías de la lista filtrada
-    const catTot={};listaCompleta.forEach(g=>{catTot[g.cat]=(catTot[g.cat]||0)+g.monto;});
+    const cats={};listaCompleta.forEach(g=>{cats[g.cat]=(cats[g.cat]||0)+g.monto;});
     // Personas de la lista filtrada
     const quien={};listaCompleta.forEach(g=>{const k=g.quien||"Sin asignar";quien[k]=(quien[k]||0)+g.monto;});
     const lista=listaCompleta.sort((a,b)=>b.fecha.localeCompare(a.fecha));
@@ -1030,7 +1019,7 @@ export default function App(){
     const diffGastos=diff(tg,tgPrev);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
 
         {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
         <div style={{marginBottom:14}}>
@@ -1165,19 +1154,19 @@ export default function App(){
             )}
 
             {/* Top 3 categorías del mes */}
-            {Object.keys(catTot).length>0&&(
+            {Object.keys(cats).length>0&&(
               <>
                 <ST>🏆 Top categorías de gasto</ST>
                 <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-                  {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).slice(0,3).map((c,i)=>{
-                    const pct=tg?Math.round((catTot[c.id]/tg)*100):0;
+                  {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).slice(0,3).map((c,i)=>{
+                    const pct=tg?Math.round((cats[c.id]/tg)*100):0;
                     return(
                       <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:i<2?12:0}}>
                         <div style={{width:24,height:24,borderRadius:"50%",background:c.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:BLANCO,flexShrink:0}}>{i+1}</div>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
                             <span style={{color:GRIS_DARK,fontWeight:700}}>{c.emoji} {c.label}</span>
-                            <span style={{color:c.color,fontWeight:900}}>{fmtMXN(catTot[c.id])}</span>
+                            <span style={{color:c.color,fontWeight:900}}>{fmtMXN(cats[c.id])}</span>
                           </div>
                           <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden"}}>
                             <div style={{height:"100%",width:`${pct}%`,background:c.color,borderRadius:3}}/>
@@ -1321,9 +1310,9 @@ export default function App(){
             <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:800,marginBottom:6,textTransform:"uppercase",letterSpacing:0.4}}>Categoría</div>
             <div style={{...S.chipRow,marginBottom:12,overflowX:"auto",flexWrap:"nowrap",paddingBottom:4}}>
               <Chip active={resCat==="todos"} color={GRIS_MED} onClick={()=>setResCat("todos")}>Todas</Chip>
-              {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).map(c=>(
+              {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>(
                 <Chip key={c.id} active={resCat===c.id} color={c.color} onClick={()=>setResCat(resCat===c.id?"todos":c.id)}>
-                  {c.emoji} {c.label} · {fmtMXN(catTot[c.id])}
+                  {c.emoji} {c.label} · {fmtMXN(cats[c.id])}
                 </Chip>
               ))}
             </div>
@@ -1375,7 +1364,7 @@ export default function App(){
 
             {/* Lista de gastos */}
             <ST>📋 Gastos {lista.length>0?`(${lista.length})`:""}</ST>
-            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
+            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
           </>
         )}
 
@@ -1478,7 +1467,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
-      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)}/>}>
+      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
         <button key={mk} onClick={()=>{setSelMonth(mk);setView("detalle");}} style={S.monthCard}>
           <div>
@@ -1503,15 +1492,15 @@ export default function App(){
     const lista=gMes(mk).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return(
       <Screen title={monthLabel(mk)} onBack={()=>setView("historial")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
         <div style={S.heroCard}>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Total del mes</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(tg)}</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.65)",marginTop:4}}>{lista.length} registros</div>
         </div>
         <ST>Por categoría</ST>
-        {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).map(c=>{
-          const pct=tg?Math.round((catTot[c.id]/tg)*100):0;
+        {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>{
+          const pct=tg?Math.round((cats[c.id]/tg)*100):0;
           return(
             <div key={c.id} style={S.catRow}>
               <div style={{...S.catEmoji,background:c.color+"22",color:c.color}}>{c.emoji}</div>
@@ -1522,12 +1511,12 @@ export default function App(){
                 </div>
                 <div style={{fontSize:10,color:GRIS_TEXT,marginTop:2}}>{pct}%</div>
               </div>
-              <div style={{fontWeight:800,color:c.color,fontSize:14,marginLeft:12}}>{fmtMXN(catTot[c.id])}</div>
+              <div style={{fontWeight:800,color:c.color,fontSize:14,marginLeft:12}}>{fmtMXN(cats[c.id])}</div>
             </div>
           );
         })}
         <ST>Todos los gastos</ST>
-        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
+        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
       </Screen>
     );
   }
@@ -1570,7 +1559,7 @@ export default function App(){
     const maxAvgDia=Math.max(...avgPorDia,1);
 
     return(
-      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)} label="📥 Excel"/>}>
+      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)} label="📥 Excel"/>}>
 
         {/* KPIs del mes */}
         <ST>📅 Este mes — {monthLabel(mk)}</ST>
@@ -1663,7 +1652,7 @@ export default function App(){
         {/* Gráfica de categorías acumuladas (todo el tiempo) */}
         <ST>🍰 Distribución de gastos por categoría</ST>
         <div style={{background:BLANCO,borderRadius:16,padding:"14px",marginBottom:16,boxShadow:"0 2px 10px rgba(0,0,0,0.06)"}}>
-          {cats.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);return tot>0;}).sort((a,b)=>{
+          {CATS.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);return tot>0;}).sort((a,b)=>{
             const ta=gastos.filter(g=>g.cat===a.id).reduce((s,g)=>s+num(g.monto),0);
             const tb=gastos.filter(g=>g.cat===b.id).reduce((s,g)=>s+num(g.monto),0);
             return tb-ta;
@@ -1734,18 +1723,6 @@ export default function App(){
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // VISTA: ADMIN DE CATEGORÍAS (solo Andres / José Luis)
-  // ══════════════════════════════════════════════════════════════════════════
-  if(view==="admin-categorias"){
-    if(!PUEDE_ADMIN_CAT.includes(usuarioActual))return null;
-    return(
-      <AdminCategoriasView
-        cats={cats} sucursales={sucursales} setView={setView}
-        onChange={fetchC} gastos={gastos}/>
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
   // VISTA: INICIO
   // ══════════════════════════════════════════════════════════════════════════
   return(
@@ -1784,8 +1761,7 @@ export default function App(){
         sucursales={sucursales} sucursalActiva={sucursalActiva}
         setSucursalActiva={setSucursalActiva}
         puedeAdmin={PUEDE_ADMIN_SUC.includes(usuarioActual)}
-        onAdmin={()=>setView("admin-sucursales")}
-        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}/>
+        onAdmin={()=>setView("admin-sucursales")}/>
 
       <div style={S.hero}>
         <div style={S.heroDate}>{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"})}</div>
@@ -1837,7 +1813,7 @@ export default function App(){
       {todayG.length>0&&(
         <div style={{padding:"0 16px"}}>
           <ST>Hoy</ST>
-          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
+          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
         </div>
       )}
 
@@ -1887,7 +1863,7 @@ function SucursalChips({sucursales,value,onChange}){
 }
 
 // Barra horizontal de sucursales en el inicio (incluye "Todas" + botón admin)
-function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat}){
+function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin}){
   const activas=sucursales.filter(s=>s.activa!==false);
   if(activas.length===0&&!puedeAdmin)return null;
   return(
@@ -1915,20 +1891,11 @@ function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onA
         );
       })}
       {puedeAdmin&&(
-        <>
-          <button onClick={onAdmin}
-            style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
-              fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
-            ⚙️ Sucursales
-          </button>
-          {onAdminCat&&(
-            <button onClick={onAdminCat}
-              style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
-                fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
-              📂 Categorías
-            </button>
-          )}
-        </>
+        <button onClick={onAdmin}
+          style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
+            fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+          ⚙️ Admin
+        </button>
       )}
     </div>
   );
@@ -2116,294 +2083,6 @@ function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiv
             <div style={{display:"inline-flex",alignItems:"center",gap:6,background:form.color+"18",color:form.color,padding:"8px 14px",borderRadius:14,fontWeight:800,fontSize:14,border:`2px solid ${form.color}`}}>
               <span style={{fontSize:18}}>{form.emoji}</span>
               <span>{form.nombre||"(sin nombre)"}</span>
-            </div>
-          </div>
-
-          {err&&<div style={S.errorBanner}>{err}</div>}
-
-          <div style={{display:"flex",gap:8,marginTop:16}}>
-            <button onClick={cancelar} disabled={saving}
-              style={{flex:1,padding:"14px 0",borderRadius:13,border:"1.5px solid #E0E0E0",background:GRIS_LIGHT,color:GRIS_MED,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
-              Cancelar
-            </button>
-            <button onClick={guardar} disabled={saving||!form.nombre.trim()}
-              style={{flex:1,padding:"14px 0",borderRadius:13,border:"none",background:saving?GRIS_MED:form.color,color:BLANCO,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit",opacity:!form.nombre.trim()?0.4:1}}>
-              {saving?"⏳ Guardando…":"💾 Guardar"}
-            </button>
-          </div>
-        </div>
-      )}
-    </Screen>
-  );
-}
-
-// Panel admin de categorías (crear/editar/desactivar/eliminar)
-// Funciona igual que el de sucursales pero con extras:
-// - cada categoría puede ser global (sucursal_id=null) o específica de una sucursal
-// - cat_key es el identificador que va en gastos.cat (NO se puede cambiar después de crear)
-function AdminCategoriasView({cats,sucursales,setView,onChange,gastos}){
-  const sucActivas=sucursales.filter(s=>s.activa!==false);
-  // Estado para crear/editar
-  const[modo,setModo]=useState(null); // null | "nueva" | {_dbId, ...} en edición
-  const[form,setForm]=useState({cat_key:"",nombre:"",emoji:"📦",color:"#546E7A",orden:0,activa:true,sucursal_id:null});
-  const[saving,setSaving]=useState(false);
-  const[err,setErr]=useState(null);
-  const[confirmDel,setConfirmDel]=useState(null);
-  // Filtro de visualización: ver todas / sólo globales / por sucursal específica
-  const[verSuc,setVerSuc]=useState("todas"); // "todas" | "globales" | id de sucursal
-
-  // Catálogo extendido de emojis y colores para categorías
-  const EMOJIS_CAT=["🍓","🥛","🍫","🍯","🧃","🍬","☕","🥤","📢","🧹","📦","🍦","🍌","🍇","🍒","🍑","🥥","🥭","🌽","🥖","🥯","🥞","🧀","🍳","🥩","🍗","🐟","🦐","🥗","🌶️","🧂","🥄","🍴","🍽️","🪣","🧴","🧻","💡","🔌","💧","🚿","💧","💵","💳","📱","📞","🚗","⛽","🔧","🛠️","📋","💼","🧾","💰","📊","🎁","🎉","🎊","✨"];
-  const COLORS_CAT=["#E8175D","#1565C0","#4E342E","#E65100","#00796B","#F57F17","#5D4037","#6A1B9A","#C62828","#2E7D32","#546E7A","#AD1457","#0277BD","#558B2F","#EF6C00","#00838F","#6D4C41","#8E24AA","#D32F2F","#388E3C","#455A64","#FF7043","#26A69A","#7E57C2"];
-
-  // Recuento de uso por categoría (cuántos gastos están en cada cat_key)
-  const usoPorCat={};
-  gastos.forEach(g=>{usoPorCat[g.cat]=(usoPorCat[g.cat]||0)+1;});
-
-  const empezarNueva=()=>{
-    setForm({cat_key:"",nombre:"",emoji:"📦",color:COLORS_CAT[Math.floor(Math.random()*COLORS_CAT.length)],orden:(cats.length+1)*10,activa:true,sucursal_id:null});
-    setModo("nueva");setErr(null);
-  };
-  const empezarEdit=(c)=>{
-    setForm({cat_key:c.id,nombre:c.label,emoji:c.emoji,color:c.color,orden:c.orden||0,activa:c.activa!==false,sucursal_id:c.sucursal_id});
-    setModo(c);setErr(null);
-  };
-  const cancelar=()=>{setModo(null);setErr(null);};
-
-  // Normalizar cat_key: minúsculas, sin acentos, sin espacios
-  const normCatKey=(s)=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9_]/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
-
-  const guardar=async()=>{
-    const nombre=(form.nombre||"").trim();
-    let cat_key=(form.cat_key||"").trim();
-    if(!cat_key)cat_key=normCatKey(nombre);
-    if(!nombre){setErr("El nombre no puede estar vacío");return;}
-    if(!cat_key){setErr("La clave técnica no puede estar vacía");return;}
-    if(!/^[a-z0-9_]+$/.test(cat_key)){setErr("La clave sólo puede tener letras minúsculas, números y _");return;}
-    setSaving(true);
-    const payload={cat_key,nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa,sucursal_id:form.sucursal_id};
-    let e;
-    if(modo==="nueva"){
-      ({error:e}=await sb.from("categorias").insert([payload]));
-    } else {
-      // Al editar NO permitimos cambiar cat_key (rompería los gastos vinculados)
-      const{cat_key:_omit,...sinKey}=payload;
-      ({error:e}=await sb.from("categorias").update(sinKey).eq("id",modo._dbId));
-    }
-    setSaving(false);
-    if(e){setErr(e.message);return;}
-    await onChange();
-    setModo(null);
-  };
-  const toggleActiva=async(c)=>{
-    await sb.from("categorias").update({activa:!(c.activa!==false)}).eq("id",c._dbId);
-    await onChange();
-  };
-  const eliminar=async(c)=>{
-    const n=usoPorCat[c.id]||0;
-    if(n>0){
-      setErr(`No se puede eliminar "${c.label}": hay ${n} gasto${n!==1?"s":""} en esta categoría. Desactívala en su lugar.`);
-      setConfirmDel(null);
-      return;
-    }
-    const{error:e}=await sb.from("categorias").delete().eq("id",c._dbId);
-    if(e){setErr(e.message);return;}
-    setConfirmDel(null);
-    await onChange();
-  };
-
-  // Filtrado de la lista a mostrar
-  const catsVisibles=cats.filter(c=>{
-    if(verSuc==="todas")return true;
-    if(verSuc==="globales")return c.sucursal_id==null;
-    return c.sucursal_id===verSuc;
-  });
-
-  return(
-    <Screen title="Categorías" onBack={()=>setView("inicio")}>
-      <div style={{...S.infoBox,marginBottom:14}}>
-        📂 Las categorías <strong>globales</strong> (🌐) aparecen en todas las sucursales. Una categoría <strong>específica</strong> sólo se ve en la sucursal asignada. Útil si Narvarte vende algo que Balbuena no.
-      </div>
-
-      {!modo&&(
-        <>
-          <button onClick={empezarNueva}
-            style={{...S.btnPri,marginTop:0,marginBottom:14,background:`linear-gradient(135deg,${ROSA},${ROSA_DARK})`}}>
-            + Nueva categoría
-          </button>
-
-          {/* Filtro */}
-          <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
-            <button onClick={()=>setVerSuc("todas")}
-              style={{padding:"6px 12px",borderRadius:14,border:verSuc==="todas"?"2px solid #E8175D":"1.5px solid #E0E0E0",
-                background:verSuc==="todas"?"#FFF5F8":"#F5F5F5",color:verSuc==="todas"?"#E8175D":"#555",
-                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
-              Todas ({cats.length})
-            </button>
-            <button onClick={()=>setVerSuc("globales")}
-              style={{padding:"6px 12px",borderRadius:14,border:verSuc==="globales"?"2px solid #E8175D":"1.5px solid #E0E0E0",
-                background:verSuc==="globales"?"#FFF5F8":"#F5F5F5",color:verSuc==="globales"?"#E8175D":"#555",
-                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
-              🌐 Globales ({cats.filter(c=>c.sucursal_id==null).length})
-            </button>
-            {sucActivas.map(s=>{
-              const n=cats.filter(c=>c.sucursal_id===s.id).length;
-              return(
-                <button key={s.id} onClick={()=>setVerSuc(s.id)}
-                  style={{padding:"6px 12px",borderRadius:14,border:verSuc===s.id?`2px solid ${s.color}`:"1.5px solid #E0E0E0",
-                    background:verSuc===s.id?s.color+"18":"#F5F5F5",color:verSuc===s.id?s.color:"#555",
-                    fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap",
-                    display:"flex",alignItems:"center",gap:4}}>
-                  <span>{s.emoji||"📍"}</span><span>{s.nombre} ({n})</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {catsVisibles.length===0?<Empty>No hay categorías que mostrar</Empty>:catsVisibles.sort((a,b)=>(a.orden||0)-(b.orden||0)).map(c=>{
-            const usos=usoPorCat[c.id]||0;
-            const activa=c.activa!==false;
-            const sucObj=c.sucursal_id?sucursales.find(s=>s.id===c.sucursal_id):null;
-            return(
-              <div key={c._dbId} style={{...S.card,marginBottom:10,opacity:activa?1:0.55,border:`1.5px solid ${c.color}33`}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <div style={{width:42,height:42,borderRadius:12,background:c.color+"22",color:c.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
-                    {c.emoji}
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:15,fontWeight:900,color:c.color,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                      {c.label}
-                      {!activa&&<span style={{fontSize:9,background:GRIS_LIGHT,color:GRIS_TEXT,borderRadius:6,padding:"1px 6px",fontWeight:700}}>INACTIVA</span>}
-                      {sucObj
-                        ?<span style={{fontSize:9,background:sucObj.color+"22",color:sucObj.color,borderRadius:6,padding:"1px 6px",fontWeight:700}}>{sucObj.emoji} {sucObj.nombre}</span>
-                        :<span style={{fontSize:9,background:"#E3F2FD",color:AZUL,borderRadius:6,padding:"1px 6px",fontWeight:700}}>🌐 Global</span>}
-                    </div>
-                    <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
-                      Clave: <code style={{background:GRIS_LIGHT,padding:"1px 5px",borderRadius:4,fontSize:10}}>{c.id}</code> · {usos} gasto{usos!==1?"s":""}
-                    </div>
-                  </div>
-                </div>
-                <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
-                  <button onClick={()=>empezarEdit(c)}
-                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #E0E0E0",background:BLANCO,color:GRIS_MED,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    ✏️ Editar
-                  </button>
-                  <button onClick={()=>toggleActiva(c)}
-                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:`1.5px solid ${activa?AMBAR:VERDE}`,background:activa?AMBAR_BG:VERDE_BG,color:activa?AMBAR:VERDE,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    {activa?"⏸ Desactivar":"▶ Activar"}
-                  </button>
-                  {usos===0&&(
-                    confirmDel===c._dbId
-                      ?<button onClick={()=>eliminar(c)}
-                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"none",background:"#E53935",color:BLANCO,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
-                          🗑 ¿Borrar?
-                        </button>
-                      :<button onClick={()=>setConfirmDel(c._dbId)}
-                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #EF9A9A",background:"#FFEBEE",color:"#E53935",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                          🗑 Eliminar
-                        </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {err&&<div style={S.errorBanner}>{err}</div>}
-        </>
-      )}
-
-      {/* Form crear/editar */}
-      {modo&&(
-        <div style={{background:BLANCO,borderRadius:16,padding:"16px",boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
-          <div style={{fontSize:14,fontWeight:900,color:GRIS_DARK,marginBottom:12}}>
-            {modo==="nueva"?"➕ Nueva categoría":`✏️ Editar ${modo.label}`}
-          </div>
-
-          <FL>Nombre *</FL>
-          <input style={S.input} placeholder="Ej: Renta, Sueldos, Servicios…"
-            value={form.nombre}
-            onChange={e=>{
-              const nombre=e.target.value;
-              setForm(f=>({...f,nombre,cat_key:modo==="nueva"&&!f.cat_key.trim()?normCatKey(nombre):f.cat_key}));
-            }}/>
-
-          <FL>Clave técnica {modo==="nueva"?<span style={{color:GRIS_TEXT,fontWeight:400}}> (autogenerada — puedes editarla)</span>:<span style={{color:GRIS_TEXT,fontWeight:400}}> (no editable después de crear)</span>}</FL>
-          <input style={{...S.input,opacity:modo==="nueva"?1:0.5,fontFamily:"monospace"}}
-            disabled={modo!=="nueva"}
-            placeholder="ej: renta"
-            value={form.cat_key}
-            onChange={e=>setForm(f=>({...f,cat_key:e.target.value}))}/>
-
-          <FL>¿En qué sucursales?</FL>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
-            <button onClick={()=>setForm(f=>({...f,sucursal_id:null}))}
-              style={{padding:"8px 14px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:800,
-                border:form.sucursal_id==null?"2px solid #E8175D":"1.5px solid #E0E0E0",
-                background:form.sucursal_id==null?"#FFF5F8":"#F5F5F5",
-                color:form.sucursal_id==null?"#E8175D":"#555"}}>
-              🌐 Todas (global)
-            </button>
-            {sucActivas.map(s=>(
-              <button key={s.id} onClick={()=>setForm(f=>({...f,sucursal_id:s.id}))}
-                style={{padding:"8px 14px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:800,
-                  border:form.sucursal_id===s.id?`2px solid ${s.color}`:"1.5px solid #E0E0E0",
-                  background:form.sucursal_id===s.id?s.color+"18":"#F5F5F5",
-                  color:form.sucursal_id===s.id?s.color:"#555",
-                  display:"flex",alignItems:"center",gap:4}}>
-                <span>{s.emoji}</span><span>Solo {s.nombre}</span>
-              </button>
-            ))}
-          </div>
-
-          <FL>Emoji</FL>
-          <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:4,maxHeight:140,overflowY:"auto",padding:6,background:GRIS_LIGHT,borderRadius:10}}>
-            {EMOJIS_CAT.map((em,i)=>(
-              <button key={i} onClick={()=>setForm(f=>({...f,emoji:em}))}
-                style={{width:36,height:36,borderRadius:8,fontSize:18,cursor:"pointer",fontFamily:"inherit",
-                  border:`2px solid ${form.emoji===em?form.color:"transparent"}`,
-                  background:form.emoji===em?form.color+"18":"#FFF"}}>
-                {em}
-              </button>
-            ))}
-          </div>
-
-          <FL>Color</FL>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
-            {COLORS_CAT.map(c=>(
-              <button key={c} onClick={()=>setForm(f=>({...f,color:c}))}
-                style={{width:36,height:36,borderRadius:"50%",cursor:"pointer",border:form.color===c?"3px solid #000":"3px solid transparent",
-                  background:c,padding:0,fontFamily:"inherit"}}/>
-            ))}
-          </div>
-
-          <FL>Orden</FL>
-          <input type="number" inputMode="numeric" style={S.input}
-            placeholder="0" value={form.orden}
-            onChange={e=>setForm(f=>({...f,orden:parseInt(e.target.value)||0}))}/>
-
-          <FL>Estado</FL>
-          <div style={{display:"flex",gap:8,marginBottom:4}}>
-            <button onClick={()=>setForm(f=>({...f,activa:true}))}
-              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
-                border:`2px solid ${form.activa?VERDE:"#E0E0E0"}`,
-                background:form.activa?VERDE_BG:GRIS_LIGHT,
-                color:form.activa?VERDE:GRIS_TEXT}}>
-              ✅ Activa
-            </button>
-            <button onClick={()=>setForm(f=>({...f,activa:false}))}
-              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
-                border:`2px solid ${!form.activa?AMBAR:"#E0E0E0"}`,
-                background:!form.activa?AMBAR_BG:GRIS_LIGHT,
-                color:!form.activa?AMBAR:GRIS_TEXT}}>
-              ⏸ Inactiva
-            </button>
-          </div>
-
-          {/* Vista previa */}
-          <div style={{background:GRIS_LIGHT,borderRadius:12,padding:"14px",marginTop:14,marginBottom:8,textAlign:"center"}}>
-            <div style={{fontSize:10,fontWeight:800,color:GRIS_TEXT,letterSpacing:0.6,marginBottom:8}}>VISTA PREVIA</div>
-            <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",padding:"10px 14px",borderRadius:13,background:form.color,color:BLANCO,minWidth:72}}>
-              <span style={{fontSize:24}}>{form.emoji}</span>
-              <span style={{fontSize:9,marginTop:3,textAlign:"center",lineHeight:1.2,fontWeight:600}}>{form.nombre||"(sin nombre)"}</span>
             </div>
           </div>
 
@@ -2641,8 +2320,8 @@ function Screen({title,onBack,action,children}){
   );
 }
 
-function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursalLabel=null,cats=CATS_DEFAULT}){
-  const cat=cats.find(c=>c.id===g.cat)||cats.find(c=>c.id==="otros")||CATS_DEFAULT[10];
+function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursalLabel=null}){
+  const cat=CATS.find(c=>c.id===g.cat)||CATS[10];
   const[confirm,setConfirm]=useState(false);
   const[showFoto,setShowFoto]=useState(false);
   const isPendiente=g.tipo_pago==="credito"&&!g.pagado;

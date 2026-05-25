@@ -1,56 +1,58 @@
-# 🍓 Lady Fresa — v6: Categorías personalizables
+# 🍓 Lady Fresa — Multi-sucursal (v5)
 
-## Qué hay nuevo
+## 🎯 Resumen
 
-Las **11 categorías hardcoded** ahora viven en una tabla de Supabase y se administran desde la app.
+La app ahora maneja **varias sucursales**. Cada gasto, venta y recolección está ligado a una sucursal. Hay panel admin para crear/editar/desactivar, filtro global, formularios con selector y comparación entre sucursales en el Resumen.
 
-## Cambios visibles
+## 🗄️ Migración de base de datos (HACER UNA VEZ)
 
-### En la barra superior (sólo admins)
-La sucursal-bar ahora tiene dos botones:
-- **⚙️ Sucursales** (antes era sólo "Admin")
-- **📂 Categorías** (nuevo)
+Antes de subir el código nuevo, ejecuta en **Supabase → SQL Editor**:
+```
+MIGRACION_SUCURSALES.sql
+```
+Esto crea la tabla `sucursales`, agrega `sucursal_id` a `gastos` / `ventas` / `recolecciones`, hace backfill (todo lo existente queda en "Balbuena") y cambia el UNIQUE de ventas a `(fecha, sucursal_id)` para que cada sucursal pueda registrar su venta diaria sin pisarse.
 
-### Panel de Categorías
-- Lista todas las categorías con buscador por sucursal (Todas / 🌐 Globales / cada sucursal)
-- Cada categoría muestra: emoji, nombre, color, ámbito (🌐 Global o sucursal específica), cuántos gastos la usan
-- ✏️ Editar: cambiar nombre, emoji, color, orden, ámbito y activación
-- ⏸ Desactivar: deja de aparecer en formularios nuevos pero queda en reportes históricos
-- 🗑 Eliminar: sólo si no tiene ningún gasto vinculado
+Verifica con:
+```sql
+SELECT * FROM sucursales ORDER BY orden;
+SELECT count(*) FROM gastos WHERE sucursal_id IS NULL;  -- debe ser 0
+```
 
-### Crear nueva categoría
-- Nombre y "clave técnica" (autogenerada del nombre)
-- 50+ emojis a elegir
-- 24 colores
-- **Ámbito:** 🌐 Todas las sucursales (global) o sólo una específica
-- Ejemplo: "Renta" como categoría sólo para Balbuena (porque sólo Balbuena paga renta)
+## 🆕 Qué cambia en la app
 
-### Formulario de gasto
-- El selector de categoría ahora muestra:
-  - Todas las globales
-  - Las específicas de la sucursal seleccionada en ese gasto
-- Las categorías inactivas no aparecen (excepto si ya está seleccionada en el gasto que estás editando)
+### Pantalla de inicio
+Aparece una **barra de sucursales** debajo del header con chips: `🌐 Todas | 🍓 Balbuena | 🍦 Del Valle | … | ⚙️ Admin`. El chip seleccionado se persiste en localStorage. En el hero del usuario admin se muestra un badge con la sucursal activa.
 
-## Migración de base de datos
+### Formularios (Gasto / Venta / Recolección)
+Cada formulario tiene arriba un selector **"📍 Sucursal"** con chips de colores. El botón "Guardar" se deshabilita hasta que elijas una. Si tienes una sucursal activa global, el formulario llega ya rellenado con ella; siempre la puedes cambiar.
 
-YA APLICADA en producción el 2026-05-25. El archivo `MIGRACION_CATEGORIAS.sql` queda como referencia.
+### Recolección
+Ahora **requiere elegir sucursal primero**. Solo se muestran los días pendientes de **esa** sucursal. Cada sucursal lleva su propio efectivo: la pantalla calcula pendientes según `(fecha, sucursal)`, no por fecha sola.
 
-Lo que hace:
-- Crea tabla `categorias` con `cat_key` único (global o por sucursal)
-- Carga las 11 categorías originales como globales
-- Los 369 gastos existentes siguen funcionando (los `cat_key` viejos coinciden con los nuevos)
+### Resumen
+- Las cards y barras siguen funcionando, pero filtran por la sucursal activa.
+- Cuando estás en "🌐 Todas" y hay 2+ sucursales con movimientos, aparece una nueva sección **"🏪 Comparativa entre sucursales"** con barras de Ventas/Gastos/Balance/Recolectado/Pendiente por sucursal. Cada fila es clickeable para entrar al detalle de esa sucursal.
 
-## Implementación técnica
+### Tendencias e Historial
+También respetan el filtro de sucursal activa.
 
-- `CATS` (constante) → `cats` (estado de Supabase, con `CATS_DEFAULT` como fallback)
-- Nuevos helpers: `catRowToObj` para convertir filas de BD al shape interno
-- `exportExcel` ahora recibe `cats` como argumento (default = `CATS_DEFAULT`)
-- `GastoRow` recibe `cats` como prop
-- Realtime: el canal "c-*" escucha cambios en `categorias` y refresca todos los dispositivos
+### Listados
+- Cada `GastoRow` muestra un badge con la sucursal cuando estás viendo "Todas" (no aparece cuando ya estás filtrado a una).
+- Lo mismo aplica a las recolecciones en el Resumen y en la pantalla de Recolección.
 
-## Por qué "otros" sigue siendo el #1 de gasto
+### Excel
+Cada hoja del Excel (Gastos / Ventas / Recolecciones) ahora tiene la columna **Sucursal**. Cuando estás viendo "Todas", el archivo incluye una hoja extra **"Por Sucursal"** con totales de gastos por sucursal y porcentajes. El nombre del archivo incluye el sufijo de la sucursal cuando filtras una específica.
 
-Tienes $210K en "Otros" (31% del total). Ahora puedes empezar a categorizarlo mejor: por ejemplo crear "Renta", "Sueldos", "Servicios" globales, o categorías específicas como "Mantenimiento Balbuena". Los gastos viejos se pueden editar uno por uno para reclasificarlos.
+### Panel admin (solo Andres y José Luis)
+Botón **⚙️ Admin** al final de la barra de sucursales. Permite:
+- ➕ Crear nuevas sucursales (nombre, emoji, color, orden, estado)
+- ✏️ Editar las existentes
+- ⏸ Desactivar (siguen apareciendo en reportes pero no en formularios de captura nuevos)
+- 🗑 Eliminar (solo si no tiene movimientos asociados)
+
+## ⚙️ Detalle técnico de la lógica de pendientes
+
+El cálculo del efectivo pendiente cambió de forma sutil: antes era "cualquier fecha con venta que no esté en `fechas_cubiertas` de alguna recolección". Ahora es **por (fecha, sucursal_id)**, es decir: una venta del 5 de mayo en Balbuena está pendiente solo si no hay una recolección de Balbuena que cubra ese 5 de mayo. Si en Del Valle hay una recolección del 5 de mayo no afecta a Balbuena.
 
 ## ✅ Verificado
 
