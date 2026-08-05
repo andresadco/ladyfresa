@@ -11,7 +11,9 @@ const GRIS_DARK="#1A1A1A",GRIS_MED="#4A4A4A",GRIS_LIGHT="#F5F5F5",GRIS_TEXT="#88
 const VERDE="#2E7D32",VERDE_BG="#E8F5E9",AMBAR="#F57F17",AMBAR_BG="#FFF8E1";
 const AZUL="#1565C0",AZUL_BG="#E3F2FD";
 
-const CATS=[
+// Categorías por defecto (fallback). El estado real se lee de Supabase tabla `categorias`.
+// Si Supabase falla o tarda, la app usa estas mientras tanto.
+const CATS_DEFAULT=[
   {id:"fruta",label:"Fruta Fresca",emoji:"🍓",color:"#E8175D"},
   {id:"lacteos",label:"Lácteos y Cremas",emoji:"🥛",color:"#1565C0"},
   {id:"chocolate",label:"Chocolate",emoji:"🍫",color:"#4E342E"},
@@ -24,13 +26,36 @@ const CATS=[
   {id:"limpieza",label:"Limpieza",emoji:"🧹",color:"#2E7D32"},
   {id:"otros",label:"Otros",emoji:"📦",color:"#546E7A"},
 ];
+// Convertir filas de tabla `categorias` (Supabase) al shape interno {id,label,emoji,color}
+const catRowToObj=(r)=>({id:r.cat_key,label:r.nombre,emoji:r.emoji||"📦",color:r.color||"#546E7A",sucursal_id:r.sucursal_id,_dbId:r.id,activa:r.activa!==false,orden:r.orden||0});
 const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres","Apolo"];
 const PUEDE_VER_NUMEROS=["José Luis","Andres"]; // Solo ellos ven resúmenes y cifras
 const PUEDE_ADMIN_SUC=["Andres","José Luis"]; // Pueden crear/editar/desactivar sucursales
+const PUEDE_ADMIN_CAT=["Andres","José Luis"]; // Pueden crear/editar/desactivar categorías
 const PINES={"José Luis":"5555","Andres":"1221"}; // PINs de acceso
 // Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
 const APOLO_REQUIERE_APROBACION=true;
-const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Otro"];
+const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Tarjeta Amex","Otro"];
+
+// ── TARJETAS CON CRÉDITO AUTOMÁTICO ──────────────────────────────────────────
+// En México el crédito de una tarjeta NO son "X días desde la compra":
+// se cuenta desde la FECHA DE CORTE. Compras todo el mes, cortan, y a partir
+// de ahí tienes N días naturales para pagar.
+//   • Tarjetas de Negocios Amex (Business / Business Gold / Business Platinum):
+//     corte + 20 días naturales (hasta 50 días de financiamiento).
+//   • Tarjetas Corporativas Amex (Corporate / Gold / Platinum Corporate):
+//     corte + 9 días naturales (hasta 39 días de financiamiento).
+//   • Tarjeta de crédito bancaria estándar en México: corte + 20 días.
+// dia_corte = día del mes en que corta (1-31). Se ajusta solo en meses cortos.
+const TARJETAS_DEFAULT=[
+  {key:"amex",      forma:"Tarjeta Amex",      label:"Amex Empresa", emoji:"💳", color:"#006FCF", dia_corte:15, dias_pago:20, perfil:"negocios"},
+  {key:"santander", forma:"Tarjeta Santander", label:"Santander",    emoji:"💳", color:"#EC0000", dia_corte:1,  dias_pago:20, perfil:"credito"},
+];
+const PERFILES_TARJETA=[
+  {id:"negocios",   label:"Amex Negocios",     dias:20, desc:"Business / Gold / Platinum Business — corte + 20 días"},
+  {id:"corporativa",label:"Amex Corporativa",  dias:9,  desc:"Corporate Card (persona moral) — corte + 9 días"},
+  {id:"credito",    label:"Crédito bancaria",  dias:20, desc:"Tarjeta de crédito estándar MX — corte + 20 días"},
+];
 // Paletas para sucursales nuevas (cuando se agreguen desde el panel)
 const SUC_COLORS=["#E8175D","#1565C0","#2E7D32","#F57F17","#6A1B9A","#00838F","#5D4037","#C62828"];
 const SUC_EMOJIS=["🍓","🍦","🧁","🍰","🥐","🍪","🍨","🍫"];
@@ -45,14 +70,41 @@ const monthLabel=(k)=>{
   return`${ns[+m-1]} ${y}`;
 };
 const addDays=(iso,n)=>{const d=new Date(iso);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
+const diasEntre=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
+const fmtFechaCorta=(iso)=>{
+  if(!iso)return"—";
+  const[y,m,d]=iso.split("-").map(Number);
+  const ms=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+  return`${d} ${ms[m-1]}`;
+};
+// Próxima fecha de corte a partir de una fecha de compra (respeta meses cortos)
+const proximoCorte=(iso,diaCorte)=>{
+  if(!iso||!diaCorte)return null;
+  const[y,m,d]=iso.split("-").map(Number);
+  const ultimoDia=(yy,mm)=>new Date(yy,mm,0).getDate();
+  const corteEn=(yy,mm)=>Math.min(diaCorte,ultimoDia(yy,mm));
+  let yy=y,mm=m;
+  if(d>corteEn(y,m)){mm++;if(mm>12){mm=1;yy++;}}
+  return`${yy}-${String(mm).padStart(2,"0")}-${String(corteEn(yy,mm)).padStart(2,"0")}`;
+};
+// Fecha límite de pago = corte + días de pago de esa tarjeta
+const vencimientoTarjeta=(isoCompra,t)=>{
+  const c=proximoCorte(isoCompra,t?.dia_corte);
+  return c?addDays(c,parseInt(t.dias_pago)||0):null;
+};
+// Días reales de crédito que te dio la compra (varían según dónde caiga en el ciclo)
+const creditoRealDias=(isoCompra,t)=>{
+  const v=vencimientoTarjeta(isoCompra,t);
+  return v?diasEntre(isoCompra,v):0;
+};
 const lsLoad=(k)=>{try{return JSON.parse(localStorage.getItem(k)||"[]");}catch{return[];}};
 const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 // Normaliza texto: sin acentos, minúsculas, sin espacios extras
 const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
-const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)=>{
-  const cl=(id)=>CATS.find(c=>c.id===id)?.label??id;
+const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT)=>{
+  const cl=(id)=>cats.find(c=>c.id===id)?.label??id;
   const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
   // Si viene sucursalId, filtra todo a esa sucursal
   const fSuc=(arr)=>sucursalId?arr.filter(x=>x.sucursal_id===sucursalId):arr;
@@ -61,12 +113,13 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)
     "Fecha":g.fecha,"Sucursal":sucName(g.sucursal_id),"Concepto":g.concepto,"Categoría":cl(g.cat),
     "Monto ($)":g.monto,"Forma de Pago":g.forma,"Tipo de Pago":g.tipo_pago||"",
     "Días Crédito":g.dias_credito||"","Vence":g.fecha_vencimiento||"","Pagado":g.pagado?"Sí":"No",
-    "Fecha Pago":g.fecha_pago||"","Quién":g.quien||"","Nota":g.nota||"",
+    "Fecha Pago":g.fecha_pago||"","Cajas":g.cajas||"","Kg":g.kg||"","$ por Caja":g.precio_caja||"",
+    "Quién":g.quien||"","Nota":g.nota||"",
   })));
-  wsD["!cols"]=[{wch:12},{wch:14},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:22}];
+  wsD["!cols"]=[{wch:12},{wch:14},{wch:28},{wch:20},{wch:11},{wch:18},{wch:14},{wch:12},{wch:12},{wch:8},{wch:12},{wch:8},{wch:8},{wch:11},{wch:14},{wch:22}];
   const totC={},totG=lista.reduce((s,g)=>s+num(g.monto),0);
   lista.forEach(g=>{totC[g.cat]=(totC[g.cat]||0)+g.monto;});
-  const rRows=CATS.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
+  const rRows=cats.filter(c=>totC[c.id]).sort((a,b)=>totC[b.id]-totC[a.id])
     .map(c=>({Categoría:c.label,"Monto ($)":totC[c.id],"% del Total":totG?+((totC[c.id]/totG)*100).toFixed(1):0}));
   rRows.push({Categoría:"TOTAL","Monto ($)":totG,"% del Total":100});
   const wsR=XLSX.utils.json_to_sheet(rRows);
@@ -84,9 +137,26 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)
   const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Efectivo ($)":v.efectivo,"Registró":v.quien||"","Nota":v.nota||""})));
   const rLista=fSuc(recolecciones);
   const wsC=XLSX.utils.json_to_sheet(rLista.map(r=>({"Fecha":r.fecha_recoleccion,"Sucursal":sucName(r.sucursal_id),"Monto ($)":r.monto_total,"Monto Físico ($)":r.monto_fisico??"","Faltante ($)":r.faltante??"","Quién":r.quien||"","Nota":r.nota||""})));
+  // Hoja Fresa: unidad económica (kilos y $/kg) de las compras registradas con cajas
+  const fresa=lista.filter(g=>num(g.kg)>0);
+  let wsF=null;
+  if(fresa.length>0){
+    const fRows=fresa.map(g=>({
+      "Fecha":g.fecha,"Sucursal":sucName(g.sucursal_id),"Proveedor":g.concepto,
+      "Tipo Caja (kg)":g.tipo_caja||"","Cajas":num(g.cajas),"Kilos":num(g.kg),
+      "$ por Caja":num(g.precio_caja),"$ por Kilo":num(g.kg)?+(num(g.monto)/num(g.kg)).toFixed(2):0,
+      "Total ($)":num(g.monto),
+    }));
+    const tKg=fresa.reduce((s,g)=>s+num(g.kg),0),tMonto=fresa.reduce((s,g)=>s+num(g.monto),0);
+    fRows.push({"Fecha":"TOTAL","Cajas":fresa.reduce((s,g)=>s+num(g.cajas),0),"Kilos":tKg,
+      "$ por Kilo":tKg?+(tMonto/tKg).toFixed(2):0,"Total ($)":tMonto});
+    wsF=XLSX.utils.json_to_sheet(fRows);
+    wsF["!cols"]=[{wch:12},{wch:14},{wch:22},{wch:13},{wch:8},{wch:9},{wch:11},{wch:11},{wch:12}];
+  }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,wsD,"Gastos");
   XLSX.utils.book_append_sheet(wb,wsR,"Por Categoría");
+  if(wsF)XLSX.utils.book_append_sheet(wb,wsF,"Fresa");
   if(wsS)XLSX.utils.book_append_sheet(wb,wsS,"Por Sucursal");
   XLSX.utils.book_append_sheet(wb,wsV,"Ventas");
   XLSX.utils.book_append_sheet(wb,wsC,"Recolecciones");
@@ -97,6 +167,9 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null)
 const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null,sucursal_id:null};
 const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:"",sucursal_id:null};
 const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
+// Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
+const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
+const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null};
 
 export default function App(){
   const[view,setView]=useState("inicio");
@@ -104,6 +177,7 @@ export default function App(){
   const[ventas,setVentas]=useState([]);
   const[recolecciones,setRecolecciones]=useState([]);
   const[sucursales,setSucursales]=useState([]);
+  const[cats,setCats]=useState(CATS_DEFAULT);
   // sucursalActiva: null = todas. Persistida en localStorage.
   const[sucursalActiva,setSucursalActivaState]=useState(()=>{
     const v=localStorage.getItem("lf_sucursal_activa");
@@ -144,14 +218,38 @@ export default function App(){
   const[catErr,setCatErr]=useState(false);
   const[uploadingFoto,setUploadingFoto]=useState(false);
   const[pagoForm,setPagoForm]=useState(null); // {id, forma, fecha, nota}
+  const[tarjetas,setTarjetas]=useState(()=>{
+    try{const v=JSON.parse(localStorage.getItem("lf_tarjetas")||"null");return Array.isArray(v)&&v.length?v:TARJETAS_DEFAULT;}
+    catch{return TARJETAS_DEFAULT;}
+  });
+  const[fForm,setFForm]=useState(FRESA0);
+  const[fSaved,setFSaved]=useState(false);
   const fileRef=useRef();
   const camaraRef=useRef();
+
+  // ── TARJETAS (config de corte / días de pago) ─────────────────────────────
+  const tarjetaDe=(forma)=>tarjetas.find(t=>t.forma===forma)||null;
+  const fetchT=async()=>{
+    const{data,error}=await sb.from("app_config").select("valor").eq("clave","tarjetas").maybeSingle();
+    if(!error&&data?.valor&&Array.isArray(data.valor)&&data.valor.length){
+      setTarjetas(data.valor);lsSave("lf_tarjetas",data.valor);
+    }
+  };
+  const saveTarjetas=async(nuevas)=>{
+    setTarjetas(nuevas);lsSave("lf_tarjetas",nuevas);
+    // Si la tabla app_config no existe todavía, queda guardado en el dispositivo
+    await sb.from("app_config").upsert({clave:"tarjetas",valor:nuevas},{onConflict:"clave"});
+  };
 
   // ── SUPABASE ─────────────────────────────────────────────────────────────
   const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});if(data)setGastos(data);};
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
   const fetchS=async()=>{const{data}=await sb.from("sucursales").select("*").order("orden",{ascending:true});if(data)setSucursales(data);};
+  const fetchC=async()=>{
+    const{data}=await sb.from("categorias").select("*").order("orden",{ascending:true});
+    if(data&&data.length>0)setCats(data.map(catRowToObj));
+  };
 
   // Auto-seleccionar quien=usuarioActual cuando alguien abre el form de recolección
   useEffect(()=>{
@@ -173,14 +271,31 @@ export default function App(){
     }
   },[view,sucursalActiva]);
 
+  // Si la forma de pago es una tarjeta configurada, el crédito se calcula solo
+  // (desde la fecha de corte, no desde la fecha de compra)
   useEffect(()=>{
-    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS()]);setLoading(false);})();
+    const t=tarjetaDe(form.forma);
+    if(!t||!form.fecha)return;
+    const dias=String(creditoRealDias(form.fecha,t));
+    setForm(f=>(f.tipo_pago==="credito"&&f.dias_credito===dias)?f:{...f,tipo_pago:"credito",dias_credito:dias});
+  },[form.forma,form.fecha,tarjetas]);
+
+  useEffect(()=>{
+    const t=tarjetaDe(fForm.forma);
+    if(!t||!fForm.fecha)return;
+    const dias=String(creditoRealDias(fForm.fecha,t));
+    setFForm(f=>(f.tipo_pago==="credito"&&f.dias_credito===dias)?f:{...f,tipo_pago:"credito",dias_credito:dias});
+  },[fForm.forma,fForm.fecha,tarjetas]);
+
+  useEffect(()=>{
+    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
     const chV=sb.channel("v-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"ventas"},fetchV).subscribe();
     const chR=sb.channel("r-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"recolecciones"},fetchR).subscribe();
     const chS=sb.channel("s-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"sucursales"},fetchS).subscribe();
-    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);};
+    const chC=sb.channel("c-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"categorias"},fetchC).subscribe();
+    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);};
   },[]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
@@ -201,7 +316,7 @@ export default function App(){
 
   // ── GASTOS ────────────────────────────────────────────────────────────────
   const promedios={};
-  CATS.forEach(c=>{const ms=gastos.filter(g=>g.cat===c.id).map(g=>g.monto);if(ms.length>1)promedios[c.id]=ms.reduce((s,m)=>s+m,0)/ms.length;});
+  cats.forEach(c=>{const ms=gastos.filter(g=>g.cat===c.id).map(g=>g.monto);if(ms.length>1)promedios[c.id]=ms.reduce((s,m)=>s+m,0)/ms.length;});
   const esInusual=(cat,monto)=>promedios[cat]&&monto>promedios[cat]*2.5;
 
   const saveGasto=async()=>{
@@ -211,11 +326,16 @@ export default function App(){
     // Si Apolo, forzar quien=Apolo
     const quienFinal=usuarioActual==="Apolo"?"Apolo":(form.quien||usuarioActual||"");
     const dias=parseInt(form.dias_credito)||0;
+    const tj=tarjetaDe(form.forma);
+    // Con tarjeta el vencimiento sale de la fecha de corte; si no, son días desde la compra
+    const vence=form.tipo_pago!=="credito"?null
+      :tj?vencimientoTarjeta(form.fecha,tj)
+      :dias?addDays(form.fecha,dias):null;
     const payload={
       fecha:form.fecha,concepto:form.concepto,cat:form.cat,
       monto:parseFloat(form.monto),forma:form.forma,tipo_pago:form.tipo_pago,
       dias_credito:dias||null,
-      fecha_vencimiento:form.tipo_pago==="credito"&&dias?addDays(form.fecha,dias):null,
+      fecha_vencimiento:vence,
       pagado:form.tipo_pago==="contado",
       quien:quienFinal,nota:form.nota,foto:form.foto,
       sucursal_id:form.sucursal_id,
@@ -227,6 +347,74 @@ export default function App(){
     await fetchG();
     setSaved(true);
     setTimeout(()=>{setSaved(false);setEditandoId(null);setForm(FORM0);setView("inicio");},1200);
+  };
+
+  // ── COMPRA DE FRESA ───────────────────────────────────────────────────────
+  const KG_CAJA={"6":6,"4":4};
+  const cajasLinea=(l)=>Object.values(l.cajas||{}).reduce((s,n)=>s+(parseInt(n)||0),0);
+  const totalLinea=(l)=>l.cortesia?0:cajasLinea(l)*num(l.precio);
+  const kgLinea=(l)=>cajasLinea(l)*(KG_CAJA[l.tipo]||0);
+  const cajasSucLinea=(l,sid)=>parseInt(l.cajas?.[sid])||0;
+  const totalFresa=fForm.lineas.reduce((s,l)=>s+totalLinea(l),0);
+  const kgFresa=fForm.lineas.reduce((s,l)=>s+kgLinea(l),0);
+  const cajasFresa=fForm.lineas.reduce((s,l)=>s+cajasLinea(l),0);
+  const totalFresaSuc=(sid)=>fForm.lineas.reduce((s,l)=>s+(l.cortesia?0:cajasSucLinea(l,sid)*num(l.precio)),0);
+  const kgFresaSuc=(sid)=>fForm.lineas.reduce((s,l)=>s+cajasSucLinea(l,sid)*(KG_CAJA[l.tipo]||0),0);
+  const cajasFresaSuc=(sid)=>fForm.lineas.reduce((s,l)=>s+cajasSucLinea(l,sid),0);
+  const setLinea=(i,patch)=>setFForm(f=>({...f,lineas:f.lineas.map((l,ix)=>ix===i?{...l,...patch}:l)}));
+  const setCajas=(i,sid,n)=>setFForm(f=>({...f,lineas:f.lineas.map((l,ix)=>
+    ix===i?{...l,cajas:{...l.cajas,[sid]:Math.max(0,n)}}:l)}));
+  // Último precio pagado por tipo de caja (para sugerirlo de un toque)
+  const ultimoPrecioCaja=(tipo)=>{
+    const g=gastos.find(x=>x.tipo_caja===tipo&&num(x.precio_caja)>0);
+    if(g)return num(g.precio_caja);
+    const ls=num(localStorage.getItem("lf_precio_caja_"+tipo));
+    return ls>0?ls:null;
+  };
+  const proveedoresFresa=[...new Set(gastos.filter(g=>g.cat==="fruta").map(g=>g.concepto))].filter(Boolean).slice(0,4);
+
+  const saveFresa=async()=>{
+    if(cajasFresa===0){setError("Agrega al menos una caja");setTimeout(()=>setError(null),3000);return;}
+    const sinPrecio=fForm.lineas.some(l=>cajasLinea(l)>0&&!l.cortesia&&num(l.precio)<=0);
+    if(sinPrecio){setError("Falta el precio por caja");setTimeout(()=>setError(null),3000);return;}
+    const quienFinal=usuarioActual==="Apolo"?"Apolo":(fForm.quien||usuarioActual||"");
+    const tj=tarjetaDe(fForm.forma);
+    const dias=parseInt(fForm.dias_credito)||0;
+    const vence=fForm.tipo_pago!=="credito"?null
+      :tj?vencimientoTarjeta(fForm.fecha,tj)
+      :dias?addDays(fForm.fecha,dias):null;
+    const grupo="fresa-"+Date.now();
+    const concepto=fForm.proveedor?.trim()||"Compra de fresa";
+    // Un gasto por sucursal: así el costo queda repartido correcto en el P&L
+    const rows=sucActivas.filter(s=>cajasFresaSuc(s.id)>0).map(s=>{
+      const detalle=fForm.lineas.filter(l=>cajasSucLinea(l,s.id)>0).map(l=>
+        `${cajasSucLinea(l,s.id)} caja${cajasSucLinea(l,s.id)!==1?"s":""} de ${l.tipo}kg`+
+        (l.cortesia?" (cortesía)":` @ ${fmtMXN(num(l.precio))}`)).join(" + ");
+      const kg=kgFresaSuc(s.id),monto=totalFresaSuc(s.id);
+      return{
+        fecha:fForm.fecha,concepto,cat:"fruta",monto,
+        forma:fForm.forma,tipo_pago:fForm.tipo_pago,
+        dias_credito:dias||null,fecha_vencimiento:vence,
+        pagado:fForm.tipo_pago==="contado",
+        quien:quienFinal,sucursal_id:s.id,foto:fForm.foto,
+        nota:`🍓 ${detalle} · ${kg} kg`+(monto>0?` · ${fmtMXN(+(monto/kg).toFixed(2))}/kg`:"")+(fForm.nota?`\n${fForm.nota}`:""),
+        // Columnas nuevas (si aún no existen en Supabase, se guarda igual sin ellas)
+        cajas:cajasFresaSuc(s.id),kg,
+        precio_caja:num(fForm.lineas.find(l=>cajasSucLinea(l,s.id)>0)?.precio)||null,
+        tipo_caja:fForm.lineas.find(l=>cajasSucLinea(l,s.id)>0)?.tipo||null,
+        grupo,
+      };
+    });
+    let{error:e}=await sb.from("gastos").insert(rows);
+    if(e){ // Fallback: la migración de columnas nuevas todavía no se corre
+      const base=rows.map(({cajas,kg,precio_caja,tipo_caja,grupo,...r})=>r);
+      ({error:e}=await sb.from("gastos").insert(base));
+    }
+    if(e){setError("Error: "+e.message);return;}
+    fForm.lineas.forEach(l=>{if(!l.cortesia&&num(l.precio)>0)lsSave("lf_precio_caja_"+l.tipo,num(l.precio));});
+    await fetchG();
+    setFSaved(true);
+    setTimeout(()=>{setFSaved(false);setFForm({...FRESA0,fecha:todayISO(),lineas:[nuevaLinea("6")]});setView("inicio");},1200);
   };
 
   const startEdit=(g)=>{
@@ -501,7 +689,7 @@ export default function App(){
 
       <FL>{catErr?<span style={{color:"#E53935"}}>Categoría * ← elige una</span>:"Categoría *"}</FL>
       <div style={{...S.catGrid,border:catErr?"2px solid #E53935":"none",borderRadius:14,padding:catErr?6:0}}>
-        {CATS.map(c=>(
+        {cats.filter(c=>c.id===form.cat||(c.activa!==false&&(c.sucursal_id==null||c.sucursal_id===form.sucursal_id))).map(c=>(
           <button key={c.id} onClick={()=>{setForm(f=>({...f,cat:c.id}));setCatErr(false);}}
             style={{...S.catBtn,background:form.cat===c.id?c.color:GRIS_LIGHT,
               color:form.cat===c.id?BLANCO:GRIS_MED,
@@ -566,7 +754,12 @@ export default function App(){
         ))}
       </div>
 
-      {form.tipo_pago==="credito"&&(
+      {form.tipo_pago==="credito"&&tarjetaDe(form.forma)&&(
+        <TarjetaCreditoBox t={tarjetaDe(form.forma)} fecha={form.fecha}
+          onConfig={PUEDE_VER_NUMEROS.includes(usuarioActual)?()=>setView("admin-tarjetas"):null}/>
+      )}
+
+      {form.tipo_pago==="credito"&&!tarjetaDe(form.forma)&&(
         <>
           <FL>Días de crédito</FL>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:4}}>
@@ -587,7 +780,12 @@ export default function App(){
       )}
 
       <FL>Forma de pago</FL>
-      <div style={S.chipRow}>{FORMA_OPTS.map(o=><Chip key={o} active={form.forma===o} color={ROSA} onClick={()=>setForm(f=>({...f,forma:o}))}>{o}</Chip>)}</div>
+      <div style={S.chipRow}>{FORMA_OPTS.map(o=>(
+        <Chip key={o} active={form.forma===o} color={tarjetaDe(o)?AZUL:ROSA}
+          onClick={()=>setForm(f=>({...f,forma:o,...(tarjetaDe(o)?{}:{tipo_pago:f.tipo_pago==="credito"&&tarjetaDe(f.forma)?"contado":f.tipo_pago})}))}>
+          {tarjetaDe(o)?`💳 ${o.replace("Tarjeta ","")}`:o}
+        </Chip>
+      ))}</div>
 
       <FL>¿Quién pagó?</FL>
       {usuarioActual==="Apolo"
@@ -640,6 +838,212 @@ export default function App(){
       <button onClick={saveGasto} disabled={!form.monto||!form.concepto||!form.sucursal_id}
         style={{...S.btnPri,opacity:(!form.monto||!form.concepto||!form.sucursal_id)?0.4:1,background:saved?VERDE:ROSA}}>
         {saved?"✅ ¡Guardado!":!form.sucursal_id?"Selecciona una sucursal":editandoId?"💾 Guardar cambios":"Guardar Gasto"}
+      </button>
+    </Screen>
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: COMPRA DE FRESA
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="fresa")return(
+    <Screen title="🍓 Compra de Fresa"
+      onBack={()=>{setFForm({...FRESA0,fecha:todayISO(),lineas:[nuevaLinea("6")]});setView("inicio");}}>
+
+      <div style={{...S.infoBox,marginBottom:4}}>
+        Pon el precio por caja y cuántas van a cada tienda. El total se calcula solo y se registra un gasto por sucursal.
+      </div>
+
+      <FL>Fecha</FL>
+      <input type="date" style={S.input} value={fForm.fecha} onChange={e=>setFForm(f=>({...f,fecha:e.target.value}))}/>
+
+      <FL>Proveedor</FL>
+      <input style={S.input} placeholder="Ej: Fresa MX, Central de Abastos…" value={fForm.proveedor}
+        onChange={e=>setFForm(f=>({...f,proveedor:e.target.value}))}/>
+      {proveedoresFresa.length>0&&!fForm.proveedor&&(
+        <div style={{...S.chipRow,marginTop:8}}>
+          {proveedoresFresa.map(p=><Chip key={p} active={false} color={ROSA} onClick={()=>setFForm(f=>({...f,proveedor:p}))}>{p}</Chip>)}
+        </div>
+      )}
+
+      {fForm.lineas.map((l,i)=>{
+        const ultimo=ultimoPrecioCaja(l.tipo);
+        const precioKg=num(l.precio)>0?num(l.precio)/(KG_CAJA[l.tipo]||1):0;
+        return(
+          <div key={i} style={{background:BLANCO,borderRadius:16,padding:14,marginTop:16,
+            boxShadow:"0 2px 10px rgba(0,0,0,0.06)",border:`1.5px solid ${l.cortesia?"#FFE082":"#F0F0F0"}`}}>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:800,color:GRIS_TEXT,textTransform:"uppercase",letterSpacing:0.6}}>
+                Tipo de caja
+              </div>
+              {fForm.lineas.length>1&&(
+                <button onClick={()=>setFForm(f=>({...f,lineas:f.lineas.filter((_,ix)=>ix!==i)}))}
+                  style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#E53935",fontWeight:700,fontFamily:"inherit"}}>
+                  ✕ Quitar
+                </button>
+              )}
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              {["6","4"].map(t=>(
+                <button key={t} onClick={()=>setLinea(i,{tipo:t})}
+                  style={{flex:1,padding:"12px 4px",borderRadius:13,cursor:"pointer",fontFamily:"inherit",
+                    border:`2px solid ${l.tipo===t?ROSA:"#E0E0E0"}`,
+                    background:l.tipo===t?ROSA_BG:GRIS_LIGHT,textAlign:"center"}}>
+                  <div style={{fontSize:20}}>📦</div>
+                  <div style={{fontSize:14,fontWeight:900,color:l.tipo===t?ROSA:GRIS_MED,marginTop:2}}>{t} kg</div>
+                </button>
+              ))}
+            </div>
+
+            <FL>{l.cortesia?"Cortesía / merma — sin costo":"Precio por caja ($)"}</FL>
+            {!l.cortesia&&(
+              <>
+                <div style={{position:"relative"}}>
+                  <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:18,fontWeight:800,color:l.precio?ROSA:"#CCC"}}>$</span>
+                  <input type="number" inputMode="decimal"
+                    style={{...S.input,paddingLeft:30,fontSize:22,fontWeight:800,color:ROSA}}
+                    placeholder="0" value={l.precio} onChange={e=>setLinea(i,{precio:e.target.value})}/>
+                </div>
+                {ultimo&&!l.precio&&(
+                  <div style={{...S.chipRow,marginTop:8}}>
+                    <Chip active={false} color={ROSA} onClick={()=>setLinea(i,{precio:String(ultimo)})}>
+                      🔁 Último: {fmtMXN(ultimo)}
+                    </Chip>
+                  </div>
+                )}
+                {precioKg>0&&(
+                  <div style={{...S.infoBox,marginTop:8}}>
+                    = <strong>${precioKg.toFixed(2)} por kilo</strong>
+                    {l.tipo==="6"&&num(l.precio)<400&&<span> · ojo: a menos de $400 normalmente la caja es de 4 kg</span>}
+                  </div>
+                )}
+              </>
+            )}
+            <button onClick={()=>setLinea(i,{cortesia:!l.cortesia,precio:l.cortesia?l.precio:""})}
+              style={{marginTop:8,width:"100%",padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",
+                fontSize:12,fontWeight:700,border:`1.5px solid ${l.cortesia?AMBAR:"#E0E0E0"}`,
+                background:l.cortesia?AMBAR_BG:GRIS_LIGHT,color:l.cortesia?AMBAR:GRIS_MED}}>
+              {l.cortesia?"✅ Cortesía del proveedor (registra kilos, $0)":"🎁 Marcar como cortesía / reposición"}
+            </button>
+
+            <FL>Cajas por sucursal</FL>
+            {sucActivas.length===0
+              ?<div style={{background:"#FFEBEE",borderRadius:12,padding:"10px 14px",fontSize:12,color:"#C62828",fontWeight:600}}>No hay sucursales activas</div>
+              :sucActivas.map(s=>{
+                const n=cajasSucLinea(l,s.id);
+                return(
+                  <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,background:n>0?(s.color||ROSA)+"10":GRIS_LIGHT,
+                    borderRadius:13,padding:"8px 10px",marginBottom:8,border:`1.5px solid ${n>0?(s.color||ROSA)+"55":"transparent"}`}}>
+                    <span style={{fontSize:18}}>{s.emoji||"📍"}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:800,color:GRIS_DARK,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.nombre}</div>
+                      {n>0&&<div style={{fontSize:11,color:GRIS_TEXT}}>
+                        {n*(KG_CAJA[l.tipo]||0)} kg{!l.cortesia&&num(l.precio)>0?` · ${fmtMXN(n*num(l.precio))}`:""}
+                      </div>}
+                    </div>
+                    <button onClick={()=>setCajas(i,s.id,n-1)} disabled={n===0}
+                      style={{width:36,height:36,borderRadius:10,border:"1.5px solid #E0E0E0",background:BLANCO,
+                        fontSize:20,fontWeight:800,color:n===0?"#DDD":GRIS_MED,cursor:n===0?"default":"pointer",fontFamily:"inherit"}}>−</button>
+                    <div style={{minWidth:26,textAlign:"center",fontSize:19,fontWeight:900,color:n>0?(s.color||ROSA):"#CCC"}}>{n}</div>
+                    <button onClick={()=>setCajas(i,s.id,n+1)}
+                      style={{width:36,height:36,borderRadius:10,border:"none",background:s.color||ROSA,
+                        fontSize:20,fontWeight:800,color:BLANCO,cursor:"pointer",fontFamily:"inherit"}}>+</button>
+                  </div>
+                );
+              })}
+            {cajasLinea(l)>0&&(
+              <div style={{textAlign:"right",fontSize:12,fontWeight:800,color:GRIS_MED,marginTop:2}}>
+                {cajasLinea(l)} caja{cajasLinea(l)!==1?"s":""} · {kgLinea(l)} kg · {fmtMXN(totalLinea(l))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {fForm.lineas.length<3&&(
+        <button onClick={()=>setFForm(f=>({...f,lineas:[...f.lineas,nuevaLinea(f.lineas[f.lineas.length-1]?.tipo==="6"?"4":"6")]}))}
+          style={{...S.btnSec,marginTop:12}}>
+          ➕ Agregar otro tipo de caja
+        </button>
+      )}
+
+      {/* TOTAL */}
+      <div style={{...S.heroCard,marginTop:20,marginBottom:0}}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.75)",fontWeight:700,letterSpacing:0.5}}>TOTAL DE LA COMPRA</div>
+        <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5,lineHeight:1.1}}>{fmtMXN(totalFresa)}</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,0.85)",marginTop:4}}>
+          {cajasFresa} caja{cajasFresa!==1?"s":""} · {kgFresa} kg
+          {totalFresa>0&&kgFresa>0?` · $${(totalFresa/kgFresa).toFixed(2)}/kg`:""}
+        </div>
+        {cajasFresa>0&&(
+          <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:6}}>
+            {sucActivas.filter(s=>cajasFresaSuc(s.id)>0).map(s=>(
+              <div key={s.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,
+                background:"rgba(0,0,0,0.15)",borderRadius:9,padding:"7px 10px"}}>
+                <span style={{fontWeight:700}}>{s.emoji||"📍"} {s.nombre}</span>
+                <span style={{fontWeight:800}}>{cajasFresaSuc(s.id)} cj · {kgFresaSuc(s.id)} kg · {fmtMXN(totalFresaSuc(s.id))}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <FL>Tipo de pago</FL>
+      <div style={{display:"flex",gap:8,marginBottom:4}}>
+        {[
+          {id:"contado",label:"Contado",emoji:"✅",color:VERDE},
+          {id:"credito",label:"Crédito",emoji:"⏳",color:AMBAR},
+        ].map(t=>(
+          <button key={t.id} onClick={()=>setFForm(f=>({...f,tipo_pago:t.id}))}
+            style={{flex:1,padding:"10px 4px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",
+              border:`2px solid ${fForm.tipo_pago===t.id?t.color:"#E0E0E0"}`,
+              background:fForm.tipo_pago===t.id?t.color+"18":GRIS_LIGHT,textAlign:"center"}}>
+            <div style={{fontSize:18}}>{t.emoji}</div>
+            <div style={{fontSize:11,fontWeight:800,color:fForm.tipo_pago===t.id?t.color:GRIS_MED}}>{t.label}</div>
+          </button>
+        ))}
+      </div>
+
+      <FL>Forma de pago</FL>
+      <div style={S.chipRow}>{FORMA_OPTS.map(o=>(
+        <Chip key={o} active={fForm.forma===o} color={tarjetaDe(o)?AZUL:ROSA}
+          onClick={()=>setFForm(f=>({...f,forma:o}))}>
+          {tarjetaDe(o)?`💳 ${o.replace("Tarjeta ","")}`:o}
+        </Chip>
+      ))}</div>
+
+      {fForm.tipo_pago==="credito"&&tarjetaDe(fForm.forma)&&(
+        <TarjetaCreditoBox t={tarjetaDe(fForm.forma)} fecha={fForm.fecha}
+          onConfig={PUEDE_VER_NUMEROS.includes(usuarioActual)?()=>setView("admin-tarjetas"):null}/>
+      )}
+      {fForm.tipo_pago==="credito"&&!tarjetaDe(fForm.forma)&&(
+        <>
+          <FL>Días de crédito</FL>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {["7","14","30"].map(d=>(
+              <Chip key={d} active={fForm.dias_credito===d} color={AMBAR}
+                onClick={()=>setFForm(f=>({...f,dias_credito:d}))}>{d} días</Chip>
+            ))}
+          </div>
+        </>
+      )}
+
+      <FL>¿Quién pagó?</FL>
+      {usuarioActual==="Apolo"
+        ?<div style={{background:"#FFF8E1",borderRadius:12,padding:"10px 14px",border:"1.5px solid #FFE082",fontSize:13,fontWeight:700,color:"#E65100"}}>🧑 Apolo (registrado automáticamente)</div>
+        :<div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={fForm.quien===o} color={GRIS_MED} onClick={()=>setFForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+      }
+
+      <FL>Nota (opcional)</FL>
+      <textarea style={{...S.input,height:56,resize:"none"}} placeholder="Ej: fresa chica, vino con merma…"
+        value={fForm.nota} onChange={e=>setFForm(f=>({...f,nota:e.target.value}))}/>
+
+      {error&&<div style={S.errorBanner}>{error}</div>}
+      <button onClick={saveFresa} disabled={cajasFresa===0}
+        style={{...S.btnPri,opacity:cajasFresa===0?0.4:1,background:fSaved?VERDE:ROSA}}>
+        {fSaved?"✅ ¡Guardado!":cajasFresa===0?"Agrega cajas para guardar"
+          :`Guardar — ${fmtMXN(totalFresa)} en ${sucActivas.filter(s=>cajasFresaSuc(s.id)>0).length} tienda${sucActivas.filter(s=>cajasFresaSuc(s.id)>0).length!==1?"s":""}`}
       </button>
     </Screen>
   );
@@ -854,7 +1258,7 @@ export default function App(){
         {gastosDia.length>0&&(
           <>
             <ST>Gastos del mismo día · {fmtMXN(totalGDia)}</ST>
-            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
+            {gastosDia.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
           </>
         )}
       </Screen>
@@ -869,12 +1273,35 @@ export default function App(){
     const pagados=gastos.filter(g=>g.tipo_pago==="credito"&&g.pagado).sort((a,b)=>(b.fecha_pago||"").localeCompare(a.fecha_pago||""));
     const totalPendiente=pendientes.reduce((s,g)=>s+num(g.monto),0);
     return(
-      <Screen title="Créditos" onBack={()=>setView("inicio")}>
+      <Screen title="Créditos" onBack={()=>setView("inicio")}
+        action={<button onClick={()=>setView("admin-tarjetas")}
+          style={{background:AZUL_BG,border:`1.5px solid ${AZUL}`,borderRadius:10,padding:"7px 11px",
+            fontSize:12,fontWeight:800,color:AZUL,cursor:"pointer",fontFamily:"inherit"}}>💳 Tarjetas</button>}>
         <div style={{background:`linear-gradient(135deg,${AMBAR},#E65100)`,borderRadius:18,padding:"22px 20px",color:BLANCO,marginBottom:16,boxShadow:"0 8px 24px rgba(245,127,23,0.3)"}}>
           <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginBottom:4}}>⏳ Total pendiente de pago</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(totalPendiente)}</div>
           <div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginTop:6}}>{pendientes.length} compra{pendientes.length!==1?"s":""} · {vencidos.length} vencida{vencidos.length!==1?"s":""}</div>
         </div>
+
+        {/* Saldo por tarjeta: lo que se junta para cada fecha límite */}
+        {tarjetas.map(t=>{
+          const delaTarjeta=pendientes.filter(g=>g.forma===t.forma);
+          if(delaTarjeta.length===0)return null;
+          const porVence={};
+          delaTarjeta.forEach(g=>{const k=g.fecha_vencimiento||"—";porVence[k]=(porVence[k]||0)+num(g.monto);});
+          return(
+            <div key={t.key} style={{background:BLANCO,borderRadius:14,padding:"12px 14px",marginBottom:10,
+              boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`4px solid ${t.color||AZUL}`}}>
+              <div style={{fontSize:13,fontWeight:900,color:GRIS_DARK}}>💳 {t.label} · corte día {t.dia_corte}</div>
+              {Object.entries(porVence).sort().map(([f,m])=>(
+                <div key={f} style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:12}}>
+                  <span style={{color:GRIS_MED}}>Pagar antes del <strong>{fmtFechaCorta(f)}</strong></span>
+                  <span style={{fontWeight:900,color:t.color||AZUL}}>{fmtMXN(m)}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
 
         {vencidos.length>0&&(
           <div style={{...S.alertaBanner,marginBottom:12}}>
@@ -912,7 +1339,7 @@ export default function App(){
                 <div>
                   <div style={{fontWeight:800,fontSize:15}}>{g.concepto}</div>
                   <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
-                    {g.fecha} · {g.quien||"—"} · {CATS.find(c=>c.id===g.cat)?.emoji} {CATS.find(c=>c.id===g.cat)?.label}
+                    {g.fecha} · {g.quien||"—"} · {cats.find(c=>c.id===g.cat)?.emoji} {cats.find(c=>c.id===g.cat)?.label}
                   </div>
                 </div>
                 <div style={{fontWeight:900,color:isVencido?"#E53935":AMBAR,fontSize:18}}>{fmtMXN(g.monto)}</div>
@@ -981,7 +1408,7 @@ export default function App(){
     // Desglose detallado por forma de pago (para tarjeta/Mercado Pago/etc)
     const porForma={};listaCompleta.forEach(g=>{const k=g.forma||"Sin método";porForma[k]=(porForma[k]||0)+g.monto;});
     // Categorías de la lista filtrada
-    const cats={};listaCompleta.forEach(g=>{cats[g.cat]=(cats[g.cat]||0)+g.monto;});
+    const catTot={};listaCompleta.forEach(g=>{catTot[g.cat]=(catTot[g.cat]||0)+g.monto;});
     // Personas de la lista filtrada
     const quien={};listaCompleta.forEach(g=>{const k=g.quien||"Sin asignar";quien[k]=(quien[k]||0)+g.monto;});
     const lista=listaCompleta.sort((a,b)=>b.fecha.localeCompare(a.fecha));
@@ -1019,7 +1446,7 @@ export default function App(){
     const diffGastos=diff(tg,tgPrev);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
 
         {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
         <div style={{marginBottom:14}}>
@@ -1154,19 +1581,19 @@ export default function App(){
             )}
 
             {/* Top 3 categorías del mes */}
-            {Object.keys(cats).length>0&&(
+            {Object.keys(catTot).length>0&&(
               <>
                 <ST>🏆 Top categorías de gasto</ST>
                 <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-                  {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).slice(0,3).map((c,i)=>{
-                    const pct=tg?Math.round((cats[c.id]/tg)*100):0;
+                  {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).slice(0,3).map((c,i)=>{
+                    const pct=tg?Math.round((catTot[c.id]/tg)*100):0;
                     return(
                       <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:i<2?12:0}}>
                         <div style={{width:24,height:24,borderRadius:"50%",background:c.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:BLANCO,flexShrink:0}}>{i+1}</div>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
                             <span style={{color:GRIS_DARK,fontWeight:700}}>{c.emoji} {c.label}</span>
-                            <span style={{color:c.color,fontWeight:900}}>{fmtMXN(cats[c.id])}</span>
+                            <span style={{color:c.color,fontWeight:900}}>{fmtMXN(catTot[c.id])}</span>
                           </div>
                           <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden"}}>
                             <div style={{height:"100%",width:`${pct}%`,background:c.color,borderRadius:3}}/>
@@ -1310,9 +1737,9 @@ export default function App(){
             <div style={{fontSize:11,color:GRIS_TEXT,fontWeight:800,marginBottom:6,textTransform:"uppercase",letterSpacing:0.4}}>Categoría</div>
             <div style={{...S.chipRow,marginBottom:12,overflowX:"auto",flexWrap:"nowrap",paddingBottom:4}}>
               <Chip active={resCat==="todos"} color={GRIS_MED} onClick={()=>setResCat("todos")}>Todas</Chip>
-              {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>(
+              {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).map(c=>(
                 <Chip key={c.id} active={resCat===c.id} color={c.color} onClick={()=>setResCat(resCat===c.id?"todos":c.id)}>
-                  {c.emoji} {c.label} · {fmtMXN(cats[c.id])}
+                  {c.emoji} {c.label} · {fmtMXN(catTot[c.id])}
                 </Chip>
               ))}
             </div>
@@ -1364,7 +1791,7 @@ export default function App(){
 
             {/* Lista de gastos */}
             <ST>📋 Gastos {lista.length>0?`(${lista.length})`:""}</ST>
-            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
+            {lista.length===0?<Empty>Sin gastos con esos filtros</Empty>:lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
           </>
         )}
 
@@ -1467,7 +1894,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
-      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)}/>}>
+      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
         <button key={mk} onClick={()=>{setSelMonth(mk);setView("detalle");}} style={S.monthCard}>
           <div>
@@ -1488,19 +1915,19 @@ export default function App(){
   // VISTA: DETALLE MES
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="detalle"&&selMonth){
-    const mk=selMonth,tg=totG(mk),cats=porCat(mk);
+    const mk=selMonth,tg=totG(mk),catTot=porCat(mk);
     const lista=gMes(mk).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return(
       <Screen title={monthLabel(mk)} onBack={()=>setView("historial")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
         <div style={S.heroCard}>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Total del mes</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(tg)}</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.65)",marginTop:4}}>{lista.length} registros</div>
         </div>
         <ST>Por categoría</ST>
-        {CATS.filter(c=>cats[c.id]).sort((a,b)=>(cats[b.id]||0)-(cats[a.id]||0)).map(c=>{
-          const pct=tg?Math.round((cats[c.id]/tg)*100):0;
+        {cats.filter(c=>catTot[c.id]).sort((a,b)=>(catTot[b.id]||0)-(catTot[a.id]||0)).map(c=>{
+          const pct=tg?Math.round((catTot[c.id]/tg)*100):0;
           return(
             <div key={c.id} style={S.catRow}>
               <div style={{...S.catEmoji,background:c.color+"22",color:c.color}}>{c.emoji}</div>
@@ -1511,12 +1938,12 @@ export default function App(){
                 </div>
                 <div style={{fontSize:10,color:GRIS_TEXT,marginTop:2}}>{pct}%</div>
               </div>
-              <div style={{fontWeight:800,color:c.color,fontSize:14,marginLeft:12}}>{fmtMXN(cats[c.id])}</div>
+              <div style={{fontWeight:800,color:c.color,fontSize:14,marginLeft:12}}>{fmtMXN(catTot[c.id])}</div>
             </div>
           );
         })}
         <ST>Todos los gastos</ST>
-        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
+        {lista.map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
       </Screen>
     );
   }
@@ -1559,7 +1986,7 @@ export default function App(){
     const maxAvgDia=Math.max(...avgPorDia,1);
 
     return(
-      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva)} label="📥 Excel"/>}>
+      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)} label="📥 Excel"/>}>
 
         {/* KPIs del mes */}
         <ST>📅 Este mes — {monthLabel(mk)}</ST>
@@ -1652,7 +2079,7 @@ export default function App(){
         {/* Gráfica de categorías acumuladas (todo el tiempo) */}
         <ST>🍰 Distribución de gastos por categoría</ST>
         <div style={{background:BLANCO,borderRadius:16,padding:"14px",marginBottom:16,boxShadow:"0 2px 10px rgba(0,0,0,0.06)"}}>
-          {CATS.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);return tot>0;}).sort((a,b)=>{
+          {cats.filter(c=>{const tot=gastos.filter(g=>g.cat===c.id).reduce((s,g)=>s+num(g.monto),0);return tot>0;}).sort((a,b)=>{
             const ta=gastos.filter(g=>g.cat===a.id).reduce((s,g)=>s+num(g.monto),0);
             const tb=gastos.filter(g=>g.cat===b.id).reduce((s,g)=>s+num(g.monto),0);
             return tb-ta;
@@ -1723,6 +2150,26 @@ export default function App(){
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: ADMIN DE CATEGORÍAS (solo Andres / José Luis)
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="admin-categorias"){
+    if(!PUEDE_ADMIN_CAT.includes(usuarioActual))return null;
+    return(
+      <AdminCategoriasView
+        cats={cats} sucursales={sucursales} setView={setView}
+        onChange={fetchC} gastos={gastos}/>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: ADMIN DE TARJETAS (solo Andres / José Luis)
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="admin-tarjetas"){
+    if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
+    return<AdminTarjetasView tarjetas={tarjetas} onSave={saveTarjetas} setView={setView}/>;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // VISTA: INICIO
   // ══════════════════════════════════════════════════════════════════════════
   return(
@@ -1761,7 +2208,8 @@ export default function App(){
         sucursales={sucursales} sucursalActiva={sucursalActiva}
         setSucursalActiva={setSucursalActiva}
         puedeAdmin={PUEDE_ADMIN_SUC.includes(usuarioActual)}
-        onAdmin={()=>setView("admin-sucursales")}/>
+        onAdmin={()=>setView("admin-sucursales")}
+        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}/>
 
       <div style={S.hero}>
         <div style={S.heroDate}>{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"})}</div>
@@ -1799,6 +2247,12 @@ export default function App(){
           <span style={{fontSize:24}}>+</span>
           <span style={{fontSize:16,fontWeight:800}}>Registrar Gasto</span>
         </button>
+        <button onClick={()=>setView("fresa")}
+          style={{...S.fabBig,padding:"15px 0",fontSize:15,background:BLANCO,color:ROSA,
+            border:`2px solid ${ROSA}`,boxShadow:"0 4px 14px rgba(232,23,93,0.12)"}}>
+          <span style={{fontSize:22}}>🍓</span>
+          <span style={{fontSize:15,fontWeight:800}}>Compra de fresa</span>
+        </button>
         <div style={{display:"flex",gap:10}}>
           <button onClick={()=>setView("ventas")} style={{...S.fabMini,background:`linear-gradient(135deg,${VERDE},#1B5E20)`,boxShadow:"0 6px 18px rgba(46,125,50,0.3)"}}>
             <span style={{fontSize:20}}>💵</span><span style={{fontSize:13,fontWeight:800}}>Venta del día</span>
@@ -1813,7 +2267,7 @@ export default function App(){
       {todayG.length>0&&(
         <div style={{padding:"0 16px"}}>
           <ST>Hoy</ST>
-          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)}/>)}
+          {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
         </div>
       )}
 
@@ -1863,7 +2317,7 @@ function SucursalChips({sucursales,value,onChange}){
 }
 
 // Barra horizontal de sucursales en el inicio (incluye "Todas" + botón admin)
-function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin}){
+function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat}){
   const activas=sucursales.filter(s=>s.activa!==false);
   if(activas.length===0&&!puedeAdmin)return null;
   return(
@@ -1891,11 +2345,20 @@ function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onA
         );
       })}
       {puedeAdmin&&(
-        <button onClick={onAdmin}
-          style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
-            fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
-          ⚙️ Admin
-        </button>
+        <>
+          <button onClick={onAdmin}
+            style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
+              fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+            ⚙️ Sucursales
+          </button>
+          {onAdminCat&&(
+            <button onClick={onAdminCat}
+              style={{padding:"6px 10px",borderRadius:14,border:"1.5px dashed #BBB",background:"#FAFAFA",color:"#888",
+                fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+              📂 Categorías
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -2083,6 +2546,294 @@ function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiv
             <div style={{display:"inline-flex",alignItems:"center",gap:6,background:form.color+"18",color:form.color,padding:"8px 14px",borderRadius:14,fontWeight:800,fontSize:14,border:`2px solid ${form.color}`}}>
               <span style={{fontSize:18}}>{form.emoji}</span>
               <span>{form.nombre||"(sin nombre)"}</span>
+            </div>
+          </div>
+
+          {err&&<div style={S.errorBanner}>{err}</div>}
+
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={cancelar} disabled={saving}
+              style={{flex:1,padding:"14px 0",borderRadius:13,border:"1.5px solid #E0E0E0",background:GRIS_LIGHT,color:GRIS_MED,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              Cancelar
+            </button>
+            <button onClick={guardar} disabled={saving||!form.nombre.trim()}
+              style={{flex:1,padding:"14px 0",borderRadius:13,border:"none",background:saving?GRIS_MED:form.color,color:BLANCO,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit",opacity:!form.nombre.trim()?0.4:1}}>
+              {saving?"⏳ Guardando…":"💾 Guardar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Screen>
+  );
+}
+
+// Panel admin de categorías (crear/editar/desactivar/eliminar)
+// Funciona igual que el de sucursales pero con extras:
+// - cada categoría puede ser global (sucursal_id=null) o específica de una sucursal
+// - cat_key es el identificador que va en gastos.cat (NO se puede cambiar después de crear)
+function AdminCategoriasView({cats,sucursales,setView,onChange,gastos}){
+  const sucActivas=sucursales.filter(s=>s.activa!==false);
+  // Estado para crear/editar
+  const[modo,setModo]=useState(null); // null | "nueva" | {_dbId, ...} en edición
+  const[form,setForm]=useState({cat_key:"",nombre:"",emoji:"📦",color:"#546E7A",orden:0,activa:true,sucursal_id:null});
+  const[saving,setSaving]=useState(false);
+  const[err,setErr]=useState(null);
+  const[confirmDel,setConfirmDel]=useState(null);
+  // Filtro de visualización: ver todas / sólo globales / por sucursal específica
+  const[verSuc,setVerSuc]=useState("todas"); // "todas" | "globales" | id de sucursal
+
+  // Catálogo extendido de emojis y colores para categorías
+  const EMOJIS_CAT=["🍓","🥛","🍫","🍯","🧃","🍬","☕","🥤","📢","🧹","📦","🍦","🍌","🍇","🍒","🍑","🥥","🥭","🌽","🥖","🥯","🥞","🧀","🍳","🥩","🍗","🐟","🦐","🥗","🌶️","🧂","🥄","🍴","🍽️","🪣","🧴","🧻","💡","🔌","💧","🚿","💧","💵","💳","📱","📞","🚗","⛽","🔧","🛠️","📋","💼","🧾","💰","📊","🎁","🎉","🎊","✨"];
+  const COLORS_CAT=["#E8175D","#1565C0","#4E342E","#E65100","#00796B","#F57F17","#5D4037","#6A1B9A","#C62828","#2E7D32","#546E7A","#AD1457","#0277BD","#558B2F","#EF6C00","#00838F","#6D4C41","#8E24AA","#D32F2F","#388E3C","#455A64","#FF7043","#26A69A","#7E57C2"];
+
+  // Recuento de uso por categoría (cuántos gastos están en cada cat_key)
+  const usoPorCat={};
+  gastos.forEach(g=>{usoPorCat[g.cat]=(usoPorCat[g.cat]||0)+1;});
+
+  const empezarNueva=()=>{
+    setForm({cat_key:"",nombre:"",emoji:"📦",color:COLORS_CAT[Math.floor(Math.random()*COLORS_CAT.length)],orden:(cats.length+1)*10,activa:true,sucursal_id:null});
+    setModo("nueva");setErr(null);
+  };
+  const empezarEdit=(c)=>{
+    setForm({cat_key:c.id,nombre:c.label,emoji:c.emoji,color:c.color,orden:c.orden||0,activa:c.activa!==false,sucursal_id:c.sucursal_id});
+    setModo(c);setErr(null);
+  };
+  const cancelar=()=>{setModo(null);setErr(null);};
+
+  // Normalizar cat_key: minúsculas, sin acentos, sin espacios
+  const normCatKey=(s)=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9_]/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
+
+  const guardar=async()=>{
+    const nombre=(form.nombre||"").trim();
+    let cat_key=(form.cat_key||"").trim();
+    if(!cat_key)cat_key=normCatKey(nombre);
+    if(!nombre){setErr("El nombre no puede estar vacío");return;}
+    if(!cat_key){setErr("La clave técnica no puede estar vacía");return;}
+    if(!/^[a-z0-9_]+$/.test(cat_key)){setErr("La clave sólo puede tener letras minúsculas, números y _");return;}
+    setSaving(true);
+    const payload={cat_key,nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa,sucursal_id:form.sucursal_id};
+    let e;
+    if(modo==="nueva"){
+      ({error:e}=await sb.from("categorias").insert([payload]));
+    } else {
+      // Al editar NO permitimos cambiar cat_key (rompería los gastos vinculados)
+      const{cat_key:_omit,...sinKey}=payload;
+      ({error:e}=await sb.from("categorias").update(sinKey).eq("id",modo._dbId));
+    }
+    setSaving(false);
+    if(e){setErr(e.message);return;}
+    await onChange();
+    setModo(null);
+  };
+  const toggleActiva=async(c)=>{
+    await sb.from("categorias").update({activa:!(c.activa!==false)}).eq("id",c._dbId);
+    await onChange();
+  };
+  const eliminar=async(c)=>{
+    const n=usoPorCat[c.id]||0;
+    if(n>0){
+      setErr(`No se puede eliminar "${c.label}": hay ${n} gasto${n!==1?"s":""} en esta categoría. Desactívala en su lugar.`);
+      setConfirmDel(null);
+      return;
+    }
+    const{error:e}=await sb.from("categorias").delete().eq("id",c._dbId);
+    if(e){setErr(e.message);return;}
+    setConfirmDel(null);
+    await onChange();
+  };
+
+  // Filtrado de la lista a mostrar
+  const catsVisibles=cats.filter(c=>{
+    if(verSuc==="todas")return true;
+    if(verSuc==="globales")return c.sucursal_id==null;
+    return c.sucursal_id===verSuc;
+  });
+
+  return(
+    <Screen title="Categorías" onBack={()=>setView("inicio")}>
+      <div style={{...S.infoBox,marginBottom:14}}>
+        📂 Las categorías <strong>globales</strong> (🌐) aparecen en todas las sucursales. Una categoría <strong>específica</strong> sólo se ve en la sucursal asignada. Útil si Narvarte vende algo que Balbuena no.
+      </div>
+
+      {!modo&&(
+        <>
+          <button onClick={empezarNueva}
+            style={{...S.btnPri,marginTop:0,marginBottom:14,background:`linear-gradient(135deg,${ROSA},${ROSA_DARK})`}}>
+            + Nueva categoría
+          </button>
+
+          {/* Filtro */}
+          <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+            <button onClick={()=>setVerSuc("todas")}
+              style={{padding:"6px 12px",borderRadius:14,border:verSuc==="todas"?"2px solid #E8175D":"1.5px solid #E0E0E0",
+                background:verSuc==="todas"?"#FFF5F8":"#F5F5F5",color:verSuc==="todas"?"#E8175D":"#555",
+                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+              Todas ({cats.length})
+            </button>
+            <button onClick={()=>setVerSuc("globales")}
+              style={{padding:"6px 12px",borderRadius:14,border:verSuc==="globales"?"2px solid #E8175D":"1.5px solid #E0E0E0",
+                background:verSuc==="globales"?"#FFF5F8":"#F5F5F5",color:verSuc==="globales"?"#E8175D":"#555",
+                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>
+              🌐 Globales ({cats.filter(c=>c.sucursal_id==null).length})
+            </button>
+            {sucActivas.map(s=>{
+              const n=cats.filter(c=>c.sucursal_id===s.id).length;
+              return(
+                <button key={s.id} onClick={()=>setVerSuc(s.id)}
+                  style={{padding:"6px 12px",borderRadius:14,border:verSuc===s.id?`2px solid ${s.color}`:"1.5px solid #E0E0E0",
+                    background:verSuc===s.id?s.color+"18":"#F5F5F5",color:verSuc===s.id?s.color:"#555",
+                    fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap",
+                    display:"flex",alignItems:"center",gap:4}}>
+                  <span>{s.emoji||"📍"}</span><span>{s.nombre} ({n})</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {catsVisibles.length===0?<Empty>No hay categorías que mostrar</Empty>:catsVisibles.sort((a,b)=>(a.orden||0)-(b.orden||0)).map(c=>{
+            const usos=usoPorCat[c.id]||0;
+            const activa=c.activa!==false;
+            const sucObj=c.sucursal_id?sucursales.find(s=>s.id===c.sucursal_id):null;
+            return(
+              <div key={c._dbId} style={{...S.card,marginBottom:10,opacity:activa?1:0.55,border:`1.5px solid ${c.color}33`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:42,height:42,borderRadius:12,background:c.color+"22",color:c.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+                    {c.emoji}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:900,color:c.color,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      {c.label}
+                      {!activa&&<span style={{fontSize:9,background:GRIS_LIGHT,color:GRIS_TEXT,borderRadius:6,padding:"1px 6px",fontWeight:700}}>INACTIVA</span>}
+                      {sucObj
+                        ?<span style={{fontSize:9,background:sucObj.color+"22",color:sucObj.color,borderRadius:6,padding:"1px 6px",fontWeight:700}}>{sucObj.emoji} {sucObj.nombre}</span>
+                        :<span style={{fontSize:9,background:"#E3F2FD",color:AZUL,borderRadius:6,padding:"1px 6px",fontWeight:700}}>🌐 Global</span>}
+                    </div>
+                    <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
+                      Clave: <code style={{background:GRIS_LIGHT,padding:"1px 5px",borderRadius:4,fontSize:10}}>{c.id}</code> · {usos} gasto{usos!==1?"s":""}
+                    </div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                  <button onClick={()=>empezarEdit(c)}
+                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #E0E0E0",background:BLANCO,color:GRIS_MED,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    ✏️ Editar
+                  </button>
+                  <button onClick={()=>toggleActiva(c)}
+                    style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:`1.5px solid ${activa?AMBAR:VERDE}`,background:activa?AMBAR_BG:VERDE_BG,color:activa?AMBAR:VERDE,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {activa?"⏸ Desactivar":"▶ Activar"}
+                  </button>
+                  {usos===0&&(
+                    confirmDel===c._dbId
+                      ?<button onClick={()=>eliminar(c)}
+                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"none",background:"#E53935",color:BLANCO,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+                          🗑 ¿Borrar?
+                        </button>
+                      :<button onClick={()=>setConfirmDel(c._dbId)}
+                          style={{flex:1,minWidth:90,padding:"8px 0",borderRadius:10,border:"1.5px solid #EF9A9A",background:"#FFEBEE",color:"#E53935",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                          🗑 Eliminar
+                        </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {err&&<div style={S.errorBanner}>{err}</div>}
+        </>
+      )}
+
+      {/* Form crear/editar */}
+      {modo&&(
+        <div style={{background:BLANCO,borderRadius:16,padding:"16px",boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
+          <div style={{fontSize:14,fontWeight:900,color:GRIS_DARK,marginBottom:12}}>
+            {modo==="nueva"?"➕ Nueva categoría":`✏️ Editar ${modo.label}`}
+          </div>
+
+          <FL>Nombre *</FL>
+          <input style={S.input} placeholder="Ej: Renta, Sueldos, Servicios…"
+            value={form.nombre}
+            onChange={e=>{
+              const nombre=e.target.value;
+              setForm(f=>({...f,nombre,cat_key:modo==="nueva"&&!f.cat_key.trim()?normCatKey(nombre):f.cat_key}));
+            }}/>
+
+          <FL>Clave técnica {modo==="nueva"?<span style={{color:GRIS_TEXT,fontWeight:400}}> (autogenerada — puedes editarla)</span>:<span style={{color:GRIS_TEXT,fontWeight:400}}> (no editable después de crear)</span>}</FL>
+          <input style={{...S.input,opacity:modo==="nueva"?1:0.5,fontFamily:"monospace"}}
+            disabled={modo!=="nueva"}
+            placeholder="ej: renta"
+            value={form.cat_key}
+            onChange={e=>setForm(f=>({...f,cat_key:e.target.value}))}/>
+
+          <FL>¿En qué sucursales?</FL>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
+            <button onClick={()=>setForm(f=>({...f,sucursal_id:null}))}
+              style={{padding:"8px 14px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:800,
+                border:form.sucursal_id==null?"2px solid #E8175D":"1.5px solid #E0E0E0",
+                background:form.sucursal_id==null?"#FFF5F8":"#F5F5F5",
+                color:form.sucursal_id==null?"#E8175D":"#555"}}>
+              🌐 Todas (global)
+            </button>
+            {sucActivas.map(s=>(
+              <button key={s.id} onClick={()=>setForm(f=>({...f,sucursal_id:s.id}))}
+                style={{padding:"8px 14px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:800,
+                  border:form.sucursal_id===s.id?`2px solid ${s.color}`:"1.5px solid #E0E0E0",
+                  background:form.sucursal_id===s.id?s.color+"18":"#F5F5F5",
+                  color:form.sucursal_id===s.id?s.color:"#555",
+                  display:"flex",alignItems:"center",gap:4}}>
+                <span>{s.emoji}</span><span>Solo {s.nombre}</span>
+              </button>
+            ))}
+          </div>
+
+          <FL>Emoji</FL>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:4,maxHeight:140,overflowY:"auto",padding:6,background:GRIS_LIGHT,borderRadius:10}}>
+            {EMOJIS_CAT.map((em,i)=>(
+              <button key={i} onClick={()=>setForm(f=>({...f,emoji:em}))}
+                style={{width:36,height:36,borderRadius:8,fontSize:18,cursor:"pointer",fontFamily:"inherit",
+                  border:`2px solid ${form.emoji===em?form.color:"transparent"}`,
+                  background:form.emoji===em?form.color+"18":"#FFF"}}>
+                {em}
+              </button>
+            ))}
+          </div>
+
+          <FL>Color</FL>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:4}}>
+            {COLORS_CAT.map(c=>(
+              <button key={c} onClick={()=>setForm(f=>({...f,color:c}))}
+                style={{width:36,height:36,borderRadius:"50%",cursor:"pointer",border:form.color===c?"3px solid #000":"3px solid transparent",
+                  background:c,padding:0,fontFamily:"inherit"}}/>
+            ))}
+          </div>
+
+          <FL>Orden</FL>
+          <input type="number" inputMode="numeric" style={S.input}
+            placeholder="0" value={form.orden}
+            onChange={e=>setForm(f=>({...f,orden:parseInt(e.target.value)||0}))}/>
+
+          <FL>Estado</FL>
+          <div style={{display:"flex",gap:8,marginBottom:4}}>
+            <button onClick={()=>setForm(f=>({...f,activa:true}))}
+              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
+                border:`2px solid ${form.activa?VERDE:"#E0E0E0"}`,
+                background:form.activa?VERDE_BG:GRIS_LIGHT,
+                color:form.activa?VERDE:GRIS_TEXT}}>
+              ✅ Activa
+            </button>
+            <button onClick={()=>setForm(f=>({...f,activa:false}))}
+              style={{flex:1,padding:"10px 0",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:800,fontSize:13,
+                border:`2px solid ${!form.activa?AMBAR:"#E0E0E0"}`,
+                background:!form.activa?AMBAR_BG:GRIS_LIGHT,
+                color:!form.activa?AMBAR:GRIS_TEXT}}>
+              ⏸ Inactiva
+            </button>
+          </div>
+
+          {/* Vista previa */}
+          <div style={{background:GRIS_LIGHT,borderRadius:12,padding:"14px",marginTop:14,marginBottom:8,textAlign:"center"}}>
+            <div style={{fontSize:10,fontWeight:800,color:GRIS_TEXT,letterSpacing:0.6,marginBottom:8}}>VISTA PREVIA</div>
+            <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",padding:"10px 14px",borderRadius:13,background:form.color,color:BLANCO,minWidth:72}}>
+              <span style={{fontSize:24}}>{form.emoji}</span>
+              <span style={{fontSize:9,marginTop:3,textAlign:"center",lineHeight:1.2,fontWeight:600}}>{form.nombre||"(sin nombre)"}</span>
             </div>
           </div>
 
@@ -2307,6 +3058,101 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
 }
 
 // ── SUBCOMPONENTES ────────────────────────────────────────────────────────────
+// ── TARJETAS ─────────────────────────────────────────────────────────────────
+// Cajita que explica el crédito real de la compra según la fecha de corte
+function TarjetaCreditoBox({t,fecha,onConfig}){
+  const corte=proximoCorte(fecha,t.dia_corte);
+  const vence=vencimientoTarjeta(fecha,t);
+  const dias=creditoRealDias(fecha,t);
+  return(
+    <div style={{background:AZUL_BG,border:`1.5px solid ${AZUL}55`,borderRadius:14,padding:"12px 14px",marginTop:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div style={{fontSize:13,fontWeight:900,color:AZUL}}>💳 {t.label} — crédito automático</div>
+        {onConfig&&<button onClick={onConfig} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,fontWeight:800,color:AZUL,fontFamily:"inherit"}}>⚙️ Ajustar</button>}
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        {[
+          {l:"Corte",v:fmtFechaCorta(corte)},
+          {l:"Pagar antes del",v:fmtFechaCorta(vence)},
+          {l:"Días de crédito",v:`${dias}`},
+        ].map(x=>(
+          <div key={x.l} style={{flex:1,background:BLANCO,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+            <div style={{fontSize:9,color:GRIS_TEXT,fontWeight:700,textTransform:"uppercase"}}>{x.l}</div>
+            <div style={{fontSize:14,fontWeight:900,color:AZUL,marginTop:2}}>{x.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:11,color:GRIS_MED,marginTop:8,lineHeight:1.45}}>
+        Se cuenta desde el corte (día {t.dia_corte}) + {t.dias_pago} días naturales. Si compras justo después del corte ganas casi el ciclo completo; justo antes, solo {t.dias_pago} días.
+      </div>
+    </div>
+  );
+}
+
+function AdminTarjetasView({tarjetas,onSave,setView}){
+  const[items,setItems]=useState(tarjetas);
+  const[ok,setOk]=useState(false);
+  const set=(i,patch)=>setItems(a=>a.map((t,ix)=>ix===i?{...t,...patch}:t));
+  const guardar=async()=>{
+    await onSave(items.map(t=>({...t,dia_corte:Math.min(31,Math.max(1,parseInt(t.dia_corte)||1)),dias_pago:Math.max(0,parseInt(t.dias_pago)||0)})));
+    setOk(true);setTimeout(()=>setOk(false),1500);
+  };
+  const hoy=todayISO();
+  return(
+    <Screen title="💳 Tarjetas" onBack={()=>setView("inicio")}>
+      <div style={{...S.infoBox,marginBottom:6,lineHeight:1.5}}>
+        En México el crédito de una tarjeta se cuenta desde la <strong>fecha de corte</strong>, no desde la compra.
+        Pon el día de corte y cuántos días naturales te dan para pagar; la app calcula sola el vencimiento de cada gasto.
+      </div>
+      {items.map((t,i)=>{
+        const vence=vencimientoTarjeta(hoy,t);
+        return(
+          <div key={t.key} style={{background:BLANCO,borderRadius:16,padding:14,marginTop:14,
+            boxShadow:"0 2px 10px rgba(0,0,0,0.06)",borderLeft:`5px solid ${t.color||AZUL}`}}>
+            <input style={{...S.input,fontWeight:800}} value={t.label} onChange={e=>set(i,{label:e.target.value})}/>
+
+            <FL>Perfil de la tarjeta</FL>
+            <div style={S.chipRow}>
+              {PERFILES_TARJETA.map(p=>(
+                <Chip key={p.id} active={t.perfil===p.id} color={AZUL}
+                  onClick={()=>set(i,{perfil:p.id,dias_pago:p.dias})}>{p.label}</Chip>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:GRIS_TEXT,marginTop:6,lineHeight:1.4}}>
+              {PERFILES_TARJETA.find(p=>p.id===t.perfil)?.desc||"Configura los días manualmente abajo."}
+            </div>
+
+            <div style={{display:"flex",gap:10}}>
+              <div style={{flex:1}}>
+                <FL>Día de corte</FL>
+                <input type="number" inputMode="numeric" min="1" max="31" style={S.input}
+                  value={t.dia_corte} onChange={e=>set(i,{dia_corte:e.target.value})}/>
+              </div>
+              <div style={{flex:1}}>
+                <FL>Días para pagar</FL>
+                <input type="number" inputMode="numeric" min="0" max="31" style={S.input}
+                  value={t.dias_pago} onChange={e=>set(i,{dias_pago:e.target.value,perfil:"custom"})}/>
+              </div>
+            </div>
+            <div style={{...S.infoBox,marginTop:10}}>
+              Una compra de hoy se paga a más tardar el <strong>{fmtFechaCorta(vence)}</strong> · {creditoRealDias(hoy,t)} días de crédito
+            </div>
+          </div>
+        );
+      })}
+      <button onClick={guardar} style={{...S.btnPri,background:ok?VERDE:ROSA}}>
+        {ok?"✅ Guardado":"Guardar tarjetas"}
+      </button>
+      <div style={{fontSize:11,color:GRIS_TEXT,marginTop:14,lineHeight:1.6}}>
+        <strong>Referencia Amex México:</strong><br/>
+        • Tarjetas de Negocios (Business, Business Gold, Business Platinum): corte + 20 días naturales, hasta 50 días de financiamiento.<br/>
+        • Tarjetas Corporativas (Corporate, Gold, Platinum Corporate): corte + 9 días naturales, hasta 39 días de financiamiento.<br/>
+        Confirma tu día de corte en el estado de cuenta o en la app de Amex — es el dato que hace exacto el cálculo.
+      </div>
+    </Screen>
+  );
+}
+
 function Screen({title,onBack,action,children}){
   return(
     <div style={{...S.root,paddingBottom:40}}>
@@ -2320,8 +3166,8 @@ function Screen({title,onBack,action,children}){
   );
 }
 
-function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursalLabel=null}){
-  const cat=CATS.find(c=>c.id===g.cat)||CATS[10];
+function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursalLabel=null,cats=CATS_DEFAULT}){
+  const cat=cats.find(c=>c.id===g.cat)||cats.find(c=>c.id==="otros")||CATS_DEFAULT[10];
   const[confirm,setConfirm]=useState(false);
   const[showFoto,setShowFoto]=useState(false);
   const isPendiente=g.tipo_pago==="credito"&&!g.pagado;
