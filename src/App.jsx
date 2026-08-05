@@ -77,6 +77,16 @@ const fmtFechaCorta=(iso)=>{
   const ms=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
   return`${d} ${ms[m-1]}`;
 };
+// ── PAGO SEMANAL A PROVEEDOR (ej: la fresa se paga todos los lunes) ──────────
+const DIAS_SEMANA=["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+// Siguiente día de la semana DESPUÉS de la fecha dada.
+// Si compras en lunes, el pago cae el lunes siguiente (7 días), no ese mismo día.
+const proximoDiaSemana=(iso,dow)=>{
+  if(!iso||dow==null)return null;
+  const d=new Date(iso+"T12:00:00");
+  const delta=((dow-d.getDay()+7)%7)||7;
+  return addDays(iso,delta);
+};
 // Próxima fecha de corte a partir de una fecha de compra (respeta meses cortos)
 const proximoCorte=(iso,diaCorte)=>{
   if(!iso||!diaCorte)return null;
@@ -169,7 +179,9 @@ const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:"",sucursal_id:null};
 const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
 // Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
 const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
-const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null};
+const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"semanal",dias_credito:"",quien:"",nota:"",foto:null};
+// Config por defecto del pago semanal: 1 = lunes (0=domingo … 6=sábado)
+const SEMANAL_DEFAULT={dia:1};
 
 export default function App(){
   const[view,setView]=useState("inicio");
@@ -224,21 +236,31 @@ export default function App(){
   });
   const[fForm,setFForm]=useState(FRESA0);
   const[fSaved,setFSaved]=useState(false);
+  const[semanal,setSemanal]=useState(()=>{
+    try{const v=JSON.parse(localStorage.getItem("lf_semanal")||"null");return v?.dia!=null?v:SEMANAL_DEFAULT;}
+    catch{return SEMANAL_DEFAULT;}
+  });
   const fileRef=useRef();
   const camaraRef=useRef();
 
   // ── TARJETAS (config de corte / días de pago) ─────────────────────────────
   const tarjetaDe=(forma)=>tarjetas.find(t=>t.forma===forma)||null;
   const fetchT=async()=>{
-    const{data,error}=await sb.from("app_config").select("valor").eq("clave","tarjetas").maybeSingle();
-    if(!error&&data?.valor&&Array.isArray(data.valor)&&data.valor.length){
-      setTarjetas(data.valor);lsSave("lf_tarjetas",data.valor);
-    }
+    const{data,error}=await sb.from("app_config").select("clave,valor").in("clave",["tarjetas","pago_semanal"]);
+    if(error||!data)return;
+    const t=data.find(r=>r.clave==="tarjetas")?.valor;
+    if(Array.isArray(t)&&t.length){setTarjetas(t);lsSave("lf_tarjetas",t);}
+    const s=data.find(r=>r.clave==="pago_semanal")?.valor;
+    if(s&&s.dia!=null){setSemanal(s);lsSave("lf_semanal",s);}
   };
-  const saveTarjetas=async(nuevas)=>{
+  const saveTarjetas=async(nuevas,nuevoSemanal)=>{
     setTarjetas(nuevas);lsSave("lf_tarjetas",nuevas);
     // Si la tabla app_config no existe todavía, queda guardado en el dispositivo
     await sb.from("app_config").upsert({clave:"tarjetas",valor:nuevas},{onConflict:"clave"});
+    if(nuevoSemanal){
+      setSemanal(nuevoSemanal);lsSave("lf_semanal",nuevoSemanal);
+      await sb.from("app_config").upsert({clave:"pago_semanal",valor:nuevoSemanal},{onConflict:"clave"});
+    }
   };
 
   // ── SUPABASE ─────────────────────────────────────────────────────────────
@@ -379,8 +401,13 @@ export default function App(){
     if(sinPrecio){setError("Falta el precio por caja");setTimeout(()=>setError(null),3000);return;}
     const quienFinal=usuarioActual==="Apolo"?"Apolo":(fForm.quien||usuarioActual||"");
     const tj=tarjetaDe(fForm.forma);
-    const dias=parseInt(fForm.dias_credito)||0;
-    const vence=fForm.tipo_pago!=="credito"?null
+    // Pago semanal al proveedor: vence el próximo día acordado (por defecto, lunes)
+    const esSemanal=fForm.tipo_pago==="semanal";
+    const fechaSemanal=esSemanal?proximoDiaSemana(fForm.fecha,semanal.dia):null;
+    const tipoDB=esSemanal?"credito":fForm.tipo_pago;
+    const dias=esSemanal?diasEntre(fForm.fecha,fechaSemanal):(parseInt(fForm.dias_credito)||0);
+    const vence=esSemanal?fechaSemanal
+      :fForm.tipo_pago!=="credito"?null
       :tj?vencimientoTarjeta(fForm.fecha,tj)
       :dias?addDays(fForm.fecha,dias):null;
     const grupo="fresa-"+Date.now();
@@ -393,9 +420,9 @@ export default function App(){
       const kg=kgFresaSuc(s.id),monto=totalFresaSuc(s.id);
       return{
         fecha:fForm.fecha,concepto,cat:"fruta",monto,
-        forma:fForm.forma,tipo_pago:fForm.tipo_pago,
+        forma:fForm.forma,tipo_pago:tipoDB,
         dias_credito:dias||null,fecha_vencimiento:vence,
-        pagado:fForm.tipo_pago==="contado",
+        pagado:tipoDB==="contado",
         quien:quienFinal,sucursal_id:s.id,foto:fForm.foto,
         nota:`🍓 ${detalle} · ${kg} kg`+(monto>0?` · ${fmtMXN(+(monto/kg).toFixed(2))}/kg`:"")+(fForm.nota?`\n${fForm.nota}`:""),
         // Columnas nuevas (si aún no existen en Supabase, se guarda igual sin ellas)
@@ -992,8 +1019,9 @@ export default function App(){
       <FL>Tipo de pago</FL>
       <div style={{display:"flex",gap:8,marginBottom:4}}>
         {[
+          {id:"semanal",label:DIAS_SEMANA[semanal.dia]+"s",emoji:"📆",color:AZUL},
           {id:"contado",label:"Contado",emoji:"✅",color:VERDE},
-          {id:"credito",label:"Crédito",emoji:"⏳",color:AMBAR},
+          {id:"credito",label:"Otro plazo",emoji:"⏳",color:AMBAR},
         ].map(t=>(
           <button key={t.id} onClick={()=>setFForm(f=>({...f,tipo_pago:t.id}))}
             style={{flex:1,padding:"10px 4px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",
@@ -1004,6 +1032,33 @@ export default function App(){
           </button>
         ))}
       </div>
+
+      {fForm.tipo_pago==="semanal"&&(()=>{
+        const pago=proximoDiaSemana(fForm.fecha,semanal.dia);
+        const d=diasEntre(fForm.fecha,pago);
+        return(
+          <div style={{background:AZUL_BG,border:`1.5px solid ${AZUL}55`,borderRadius:14,padding:"12px 14px",marginTop:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:900,color:AZUL}}>📆 Pago semanal al proveedor</div>
+              {PUEDE_VER_NUMEROS.includes(usuarioActual)&&(
+                <button onClick={()=>setView("admin-tarjetas")}
+                  style={{background:"none",border:"none",cursor:"pointer",fontSize:11,fontWeight:800,color:AZUL,fontFamily:"inherit"}}>⚙️ Cambiar día</button>
+              )}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              {[{l:"Se paga el",v:fmtFechaCorta(pago)},{l:"Día",v:DIAS_SEMANA[semanal.dia]},{l:"Días",v:`${d}`}].map(x=>(
+                <div key={x.l} style={{flex:1,background:BLANCO,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:GRIS_TEXT,fontWeight:700,textTransform:"uppercase"}}>{x.l}</div>
+                  <div style={{fontSize:14,fontWeight:900,color:AZUL,marginTop:2}}>{x.v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:GRIS_MED,marginTop:8,lineHeight:1.45}}>
+              Queda en Créditos hasta que lo marques pagado. Todo lo que compres esta semana se junta para ese {DIAS_SEMANA[semanal.dia].toLowerCase()}.
+            </div>
+          </div>
+        );
+      })()}
 
       <FL>Forma de pago</FL>
       <div style={S.chipRow}>{FORMA_OPTS.map(o=>(
@@ -2166,7 +2221,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="admin-tarjetas"){
     if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
-    return<AdminTarjetasView tarjetas={tarjetas} onSave={saveTarjetas} setView={setView}/>;
+    return<AdminTarjetasView tarjetas={tarjetas} semanal={semanal} onSave={saveTarjetas} setView={setView}/>;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -3089,17 +3144,35 @@ function TarjetaCreditoBox({t,fecha,onConfig}){
   );
 }
 
-function AdminTarjetasView({tarjetas,onSave,setView}){
+function AdminTarjetasView({tarjetas,semanal,onSave,setView}){
   const[items,setItems]=useState(tarjetas);
+  const[sem,setSem]=useState(semanal||SEMANAL_DEFAULT);
   const[ok,setOk]=useState(false);
   const set=(i,patch)=>setItems(a=>a.map((t,ix)=>ix===i?{...t,...patch}:t));
   const guardar=async()=>{
-    await onSave(items.map(t=>({...t,dia_corte:Math.min(31,Math.max(1,parseInt(t.dia_corte)||1)),dias_pago:Math.max(0,parseInt(t.dias_pago)||0)})));
+    await onSave(items.map(t=>({...t,dia_corte:Math.min(31,Math.max(1,parseInt(t.dia_corte)||1)),dias_pago:Math.max(0,parseInt(t.dias_pago)||0)})),sem);
     setOk(true);setTimeout(()=>setOk(false),1500);
   };
   const hoy=todayISO();
   return(
-    <Screen title="💳 Tarjetas" onBack={()=>setView("inicio")}>
+    <Screen title="💳 Pagos y tarjetas" onBack={()=>setView("inicio")}>
+      {/* ── Pago semanal al proveedor de fresa ── */}
+      <div style={{background:BLANCO,borderRadius:16,padding:14,marginBottom:18,
+        boxShadow:"0 2px 10px rgba(0,0,0,0.06)",borderLeft:`5px solid ${ROSA}`}}>
+        <div style={{fontSize:14,fontWeight:900,color:GRIS_DARK}}>🍓 Pago semanal al proveedor</div>
+        <div style={{fontSize:11,color:GRIS_TEXT,marginTop:4,lineHeight:1.45}}>
+          Día en que le pagas la fresa cada semana. Las compras se marcan solas para el siguiente.
+        </div>
+        <div style={{...S.chipRow,marginTop:12}}>
+          {DIAS_SEMANA.map((d,i)=>(
+            <Chip key={i} active={sem.dia===i} color={ROSA} onClick={()=>setSem({...sem,dia:i})}>{d.slice(0,3)}</Chip>
+          ))}
+        </div>
+        <div style={{...S.infoBox,marginTop:12}}>
+          Una compra de hoy se pagaría el <strong>{fmtFechaCorta(proximoDiaSemana(hoy,sem.dia))}</strong> · {diasEntre(hoy,proximoDiaSemana(hoy,sem.dia))} días
+        </div>
+      </div>
+
       <div style={{...S.infoBox,marginBottom:6,lineHeight:1.5}}>
         En México el crédito de una tarjeta se cuenta desde la <strong>fecha de corte</strong>, no desde la compra.
         Pon el día de corte y cuántos días naturales te dan para pagar; la app calcula sola el vencimiento de cada gasto.
@@ -3141,7 +3214,7 @@ function AdminTarjetasView({tarjetas,onSave,setView}){
         );
       })}
       <button onClick={guardar} style={{...S.btnPri,background:ok?VERDE:ROSA}}>
-        {ok?"✅ Guardado":"Guardar tarjetas"}
+        {ok?"✅ Guardado":"Guardar configuración"}
       </button>
       <div style={{fontSize:11,color:GRIS_TEXT,marginTop:14,lineHeight:1.6}}>
         <strong>Referencia Amex México:</strong><br/>
@@ -3373,3 +3446,4 @@ function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia
     </>
   );
 }
+
