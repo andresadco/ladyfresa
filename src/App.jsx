@@ -71,6 +71,9 @@ const monthLabel=(k)=>{
 };
 const addDays=(iso,n)=>{const d=new Date(iso);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
 const diasEntre=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
+const yesterdayISO=()=>addDays(todayISO(),-1);
+// Efectivo que DEBE haber en la caja: lo que entró menos lo que salió
+const efectivoEsperado=(v)=>num(v?.efectivo)-num(v?.salidas);
 const fmtFechaCorta=(iso)=>{
   if(!iso)return"—";
   const[y,m,d]=iso.split("-").map(Number);
@@ -144,7 +147,7 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
     wsS=XLSX.utils.json_to_sheet(sRows);
   }
   const vLista=fSuc(ventas).filter(v=>!mk||monthKey(v.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Efectivo ($)":v.efectivo,"Registró":v.quien||"","Nota":v.nota||""})));
+  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Entró ($)":num(v.efectivo),"Salió ($)":num(v.salidas),"Esperado ($)":num(v.efectivo)-num(v.salidas),"¿En qué salió?":v.salidas_nota||"","Registró":v.quien||"","Nota":v.nota||""})));
   const rLista=fSuc(recolecciones);
   const wsC=XLSX.utils.json_to_sheet(rLista.map(r=>({"Fecha":r.fecha_recoleccion,"Sucursal":sucName(r.sucursal_id),"Monto ($)":r.monto_total,"Monto Físico ($)":r.monto_fisico??"","Faltante ($)":r.faltante??"","Quién":r.quien||"","Nota":r.nota||""})));
   // Hoja Fresa: unidad económica (kilos y $/kg) de las compras registradas con cajas
@@ -175,7 +178,7 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
 };
 
 const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null,sucursal_id:null};
-const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:"",sucursal_id:null};
+const VFORM0={fecha:yesterdayISO(),efectivo:"",salidas:"",salidas_nota:"",quien:"",nota:"",sucursal_id:null};
 const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
 // Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
 const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
@@ -481,18 +484,21 @@ export default function App(){
   const saveVenta=async()=>{
     if(!vForm.efectivo)return;
     if(!vForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
-    const payload={efectivo:parseFloat(vForm.efectivo),quien:vForm.quien,nota:vForm.nota,sucursal_id:vForm.sucursal_id};
+    const payload={efectivo:parseFloat(vForm.efectivo),salidas:num(vForm.salidas)||null,
+      salidas_nota:vForm.salidas_nota||null,quien:vForm.quien,nota:vForm.nota,sucursal_id:vForm.sucursal_id};
     // Buscar si ya existe por fecha + sucursal
     const{data:existing}=await sb.from("ventas").select("id").eq("fecha",vForm.fecha).eq("sucursal_id",vForm.sucursal_id).limit(1);
     let err;
-    if(existing&&existing.length>0){
-      // Actualizar el existente
-      const{error:e}=await sb.from("ventas").update(payload).eq("id",existing[0].id);
-      err=e;
-    } else {
-      // Insertar nuevo
-      const{error:e}=await sb.from("ventas").insert([{...payload,fecha:vForm.fecha}]);
-      err=e;
+    const guardar=async(p)=>{
+      if(existing&&existing.length>0){
+        const{error:e}=await sb.from("ventas").update(p).eq("id",existing[0].id);return e;
+      }
+      const{error:e}=await sb.from("ventas").insert([{...p,fecha:vForm.fecha}]);return e;
+    };
+    err=await guardar(payload);
+    if(err){ // Fallback por si las columnas de salidas aún no existen
+      const{salidas:_s,salidas_nota:_sn,...base}=payload;
+      err=await guardar({...base,nota:[vForm.nota,num(vForm.salidas)>0?`Salidas: ${fmtMXN(num(vForm.salidas))}${vForm.salidas_nota?" — "+vForm.salidas_nota:""}`:""].filter(Boolean).join("\n")});
     }
     if(err){setError("Error: "+err.message);return;}
     const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});
@@ -509,7 +515,7 @@ export default function App(){
     if(!rForm.selDias.length){setError("Selecciona al menos un día para recolectar");setTimeout(()=>setError(null),3000);return;}
     if(!quienFinal){setError("Indica quién recolecta");setTimeout(()=>setError(null),3000);return;}
     // Los montos vienen de las ventas de ESA sucursal en esas fechas
-    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+num(v?.efectivo);},0);
+    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+efectivoEsperado(v);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
     const requiereAprobacion=quienFinal==="Apolo";
@@ -604,7 +610,7 @@ export default function App(){
   });
   // Lista de fechas (únicas) pendientes — usadas en pantallas de recolección cuando hay sucursal activa
   const diasPendientes=[...new Set(pendVentaIds.map(v=>v.fecha))].sort();
-  const montoPendiente=pendVentaIds.reduce((s,v)=>s+num(v.efectivo),0);
+  const montoPendiente=pendVentaIds.reduce((s,v)=>s+efectivoEsperado(v),0);
   const todayG=gastosF.filter(g=>g.fecha===todayISO());
   const todayTG=todayG.reduce((s,g)=>s+num(g.monto),0);
   const todayV=ventasF.find(v=>v.fecha===todayISO());
@@ -1108,22 +1114,55 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="ventas")return(
     <Screen title="Venta de Efectivo" onBack={()=>{setVForm(VFORM0);setView("inicio");}}>
-      <div style={{...S.infoBox,marginBottom:16}}>💵 Registra el efectivo del día para cuadrar la recolección.</div>
+      <div style={{...S.infoBox,marginBottom:16}}>💵 Registra lo que entró y lo que salió de la caja. El esperado es lo que se debe recolectar.</div>
       <FL>📍 Sucursal *</FL>
       <SucursalChips sucursales={sucActivas} value={vForm.sucursal_id}
         onChange={(id)=>setVForm(f=>({...f,sucursal_id:id}))}/>
       <FL>Fecha</FL>
+      <div style={{...S.chipRow,marginBottom:8}}>
+        <Chip active={vForm.fecha===yesterdayISO()} color={VERDE} onClick={()=>setVForm(f=>({...f,fecha:yesterdayISO()}))}>Ayer</Chip>
+        <Chip active={vForm.fecha===todayISO()} color={VERDE} onClick={()=>setVForm(f=>({...f,fecha:todayISO()}))}>Hoy</Chip>
+      </div>
       <input type="date" style={S.input} value={vForm.fecha} onChange={e=>setVForm(f=>({...f,fecha:e.target.value}))}/>
       {vForm.sucursal_id&&ventas.find(v=>v.fecha===vForm.fecha&&v.sucursal_id===vForm.sucursal_id)&&(
         <div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:4}}>⚠️ Ya existe venta de {sucName(vForm.sucursal_id)} el {vForm.fecha} — se sobreescribirá</div>
       )}
-      <FL>Efectivo del día ($) *</FL>
+      <FL>💵 Efectivo que entró ($) *</FL>
       <div style={{position:"relative"}}>
         <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:20,fontWeight:800,color:VERDE}}>$</span>
         <input type="number" inputMode="decimal"
           style={{...S.input,paddingLeft:32,fontSize:28,fontWeight:800,color:VERDE}}
           placeholder="0" value={vForm.efectivo} onChange={e=>setVForm(f=>({...f,efectivo:e.target.value}))}/>
       </div>
+
+      <FL>💸 Efectivo que salió de la caja ($)</FL>
+      <div style={{position:"relative"}}>
+        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:20,fontWeight:800,color:vForm.salidas?"#E53935":"#CCC"}}>$</span>
+        <input type="number" inputMode="decimal"
+          style={{...S.input,paddingLeft:32,fontSize:24,fontWeight:800,color:"#E53935"}}
+          placeholder="0" value={vForm.salidas} onChange={e=>setVForm(f=>({...f,salidas:e.target.value}))}/>
+      </div>
+      {num(vForm.salidas)>0&&(
+        <input style={{...S.input,marginTop:8}} placeholder="¿En qué se fue? Ej: fresa, gas, taxi…"
+          value={vForm.salidas_nota} onChange={e=>setVForm(f=>({...f,salidas_nota:e.target.value}))}/>
+      )}
+
+      {/* Efectivo esperado en caja */}
+      <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:16,padding:"18px 20px",color:BLANCO,marginTop:18,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.75)",fontWeight:700,letterSpacing:0.5}}>EFECTIVO ESPERADO EN CAJA</div>
+        <div style={{fontSize:36,fontWeight:900,letterSpacing:-1.5,lineHeight:1.15}}>
+          {fmtMXN(num(vForm.efectivo)-num(vForm.salidas))}
+        </div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.8)",marginTop:4}}>
+          {fmtMXN(num(vForm.efectivo))} entró − {fmtMXN(num(vForm.salidas))} salió
+        </div>
+      </div>
+      {num(vForm.salidas)>0&&(
+        <div style={{...S.infoBox,marginTop:10,lineHeight:1.45}}>
+          Si esa salida fue una compra, regístrala también en Gastos para que aparezca en el P&L. Aquí solo sirve para cuadrar la caja.
+        </div>
+      )}
+
       <FL>¿Quién registra?</FL>
       <div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={vForm.quien===o} color={VERDE} onClick={()=>setVForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
       <FL>Nota</FL>
@@ -1254,7 +1293,7 @@ export default function App(){
                 <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>Registró: {v?.quien||"—"}</div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <div style={{fontWeight:900,color:VERDE,fontSize:16}}>{fmtMXN(v?.efectivo)}</div>
+                <div style={{fontWeight:900,color:VERDE,fontSize:16}}>{fmtMXN(efectivoEsperado(v))}</div>
                 <span style={{fontSize:11,background:VERDE_BG,color:VERDE,borderRadius:6,padding:"2px 7px",fontWeight:700}}>✓</span>
                 <span style={{color:"#CCC",fontSize:18}}>›</span>
               </div>
@@ -1285,8 +1324,13 @@ export default function App(){
     return(
       <Screen title={`Día · ${selVentaDia}`} onBack={()=>setView(backView)}>
         <div style={{background:`linear-gradient(135deg,${v?VERDE:"#546E7A"},${v?"#1B5E20":"#37474F"})`,borderRadius:18,padding:"22px 20px",color:BLANCO,marginBottom:16,boxShadow:"0 8px 24px rgba(0,0,0,0.15)"}}>
-          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginBottom:4}}>{v?"💵 Venta del día":"📭 Sin registro"}</div>
-          <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{v?fmtMXN(v.efectivo):"$0"}</div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginBottom:4}}>{v?"💵 Efectivo esperado en caja":"📭 Sin registro"}</div>
+          <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{v?fmtMXN(efectivoEsperado(v)):"$0"}</div>
+          {v&&num(v.salidas)>0&&(
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.85)",marginTop:6}}>
+              {fmtMXN(num(v.efectivo))} entró − {fmtMXN(num(v.salidas))} salió{v.salidas_nota?` (${v.salidas_nota})`:""}
+            </div>
+          )}
           {v&&<div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginTop:6}}>Registró: <strong>{v.quien||"—"}</strong></div>}
         </div>
 
@@ -1300,10 +1344,10 @@ export default function App(){
 
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           {v?(
-            <button onClick={()=>{setVForm({fecha:v.fecha,efectivo:String(v.efectivo),quien:v.quien||"",nota:v.nota||""});setView("ventas");}}
+            <button onClick={()=>{setVForm({fecha:v.fecha,efectivo:String(v.efectivo),salidas:v.salidas?String(v.salidas):"",salidas_nota:v.salidas_nota||"",quien:v.quien||"",nota:v.nota||"",sucursal_id:v.sucursal_id||null});setView("ventas");}}
               style={{flex:1,...S.actionBtn,color:AZUL,borderColor:AZUL,background:AZUL_BG}}>✏️ Editar venta</button>
           ):(
-            <button onClick={()=>{setVForm({fecha:selVentaDia,efectivo:"",quien:"",nota:""});setView("ventas");}}
+            <button onClick={()=>{setVForm({...VFORM0,fecha:selVentaDia});setView("ventas");}}
               style={{flex:1,...S.actionBtn,color:VERDE,borderColor:VERDE,background:VERDE_BG}}>+ Registrar venta</button>
           )}
         </div>
@@ -1479,7 +1523,7 @@ export default function App(){
     // Pendiente SOLO del mes seleccionado: días con venta del mes que no estén recolectados
     const diasMesConVenta=ventasMes.map(v=>v.fecha);
     const diasMesPendientes=diasMesConVenta.filter(d=>!diasRecolectados.includes(d));
-    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
+    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0);
     // Faltantes del mes (diferencia entre lo que debió recolectarse y lo físico)
     const faltantesMes=recoleccionesMes.reduce((s,r)=>s+num(r.faltante),0);
     // Recolectado por persona en el mes
@@ -1674,7 +1718,7 @@ export default function App(){
                 const ge=gMesS.filter(g=>g.forma==="Efectivo").reduce((a,g)=>a+num(g.monto),0);
                 // Pendiente: días con venta en esta sucursal cuya (fecha,suc) no esté cubierta por una reco de la misma suc
                 const recosSucCubre=recolecciones.filter(r=>r.sucursal_id===s.id).flatMap(r=>r.fechas_cubiertas||[]);
-                const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+num(v.efectivo),0);
+                const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+efectivoEsperado(v),0);
                 return{s,gt,vt,rt,ge,balance:vt-gt,balanceEf:vt-ge,pend};
               }).filter(f=>f.gt>0||f.vt>0||f.rt>0); // ocultar sucursales sin movimiento
               if(filas.length<2)return null;
@@ -2918,7 +2962,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
   const recosSuc=sucForm?recolecciones.filter(r=>r.sucursal_id===sucForm):[];
   const diasCubiertos=recosSuc.flatMap(r=>r.fechas_cubiertas||[]);
   const diasPendientesSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).map(v=>v.fecha).sort();
-  const montoPendienteSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).reduce((s,v)=>s+num(v.efectivo),0);
+  const montoPendienteSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).reduce((s,v)=>s+efectivoEsperado(v),0);
 
   return(
     <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
@@ -2944,7 +2988,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
               {rForm.selDias.length>0&&(
                 <div style={{background:VERDE_BG,borderRadius:12,padding:"14px 16px",marginTop:4,border:"1px solid #A5D6A7",marginBottom:4}}>
                   <div style={{fontSize:12,color:VERDE,fontWeight:700}}>Total a recolectar</div>
-                  <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0))}</div>
+                  <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0))}</div>
                 </div>
               )}
 
@@ -2961,7 +3005,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
 
               {/* ── MONTO FÍSICO ── */}
               {(()=>{
-                const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
+                const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0);
                 const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
                 const faltante=montoFisico!=null?Math.max(0,montoDeclarado-montoFisico):0;
                 const sobra=montoFisico!=null?Math.max(0,montoFisico-montoDeclarado):0;
@@ -3394,7 +3438,8 @@ function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia
                 </div>
                 <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
                   {v?`Registró: ${v.quien||"—"} · `:"Sin registro · "}
-                  <strong style={{color:v?VERDE:"#E53935"}}>{v?fmtMXN(v.efectivo):"$0"}</strong>
+                  <strong style={{color:v?VERDE:"#E53935"}}>{v?fmtMXN(efectivoEsperado(v)):"$0"}</strong>
+                  {num(v?.salidas)>0&&<span style={{color:"#E53935"}}> (−{fmtMXN(num(v.salidas))} de salidas)</span>}
                 </div>
               </button>
               <button onClick={()=>{
