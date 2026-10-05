@@ -116,7 +116,7 @@ const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
-const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT)=>{
+const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT,mermas=[])=>{
   const cl=(id)=>cats.find(c=>c.id===id)?.label??id;
   const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
   // Si viene sucursalId, filtra todo a esa sucursal
@@ -166,10 +166,24 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
     wsF=XLSX.utils.json_to_sheet(fRows);
     wsF["!cols"]=[{wch:12},{wch:14},{wch:22},{wch:13},{wch:8},{wch:9},{wch:11},{wch:11},{wch:12}];
   }
+  // Hoja Merma: lo que se tiró por día y sucursal (informativo, no se suma a gastos)
+  const mLista=fSuc(mermas).filter(m=>!mk||monthKey(m.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  let wsM=null;
+  if(mLista.length>0){
+    const mRows=mLista.map(m=>({"Fecha":m.fecha,"Sucursal":sucName(m.sucursal_id),"Insumo":m.insumo,
+      "Cantidad":num(m.cantidad),"Unidad":m.unidad,"Kg":m.kg!=null?num(m.kg):"","Motivo":m.motivo||"",
+      "$ por unidad":m.costo_unit!=null?num(m.costo_unit):"","Valor ($)":m.monto!=null?num(m.monto):"",
+      "Registró":m.quien||"","Nota":m.nota||""}));
+    const tKgFresa=mLista.filter(m=>m.insumo==="Fresa").reduce((a,m)=>a+num(m.kg),0);
+    mRows.push({"Fecha":"TOTAL","Kg":tKgFresa?`${+tKgFresa.toFixed(2)} kg fresa`:"","Valor ($)":mLista.reduce((a,m)=>a+num(m.monto),0)});
+    wsM=XLSX.utils.json_to_sheet(mRows);
+    wsM["!cols"]=[{wch:12},{wch:14},{wch:16},{wch:9},{wch:7},{wch:14},{wch:20},{wch:12},{wch:11},{wch:12},{wch:22}];
+  }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,wsD,"Gastos");
   XLSX.utils.book_append_sheet(wb,wsR,"Por Categoría");
   if(wsF)XLSX.utils.book_append_sheet(wb,wsF,"Fresa");
+  if(wsM)XLSX.utils.book_append_sheet(wb,wsM,"Merma");
   if(wsS)XLSX.utils.book_append_sheet(wb,wsS,"Por Sucursal");
   XLSX.utils.book_append_sheet(wb,wsV,"Ventas");
   XLSX.utils.book_append_sheet(wb,wsC,"Recolecciones");
@@ -183,6 +197,11 @@ const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fis
 // Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
 const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
 const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"semanal",dias_credito:"",quien:"",nota:"",foto:null};
+// Merma del día: lo que se tira en tienda (no es gasto nuevo, ya está en la compra)
+const INSUMOS_MERMA=["Fresa","Crema","Yogurt griego","Chocolate","Crumble","Toppings","Desechables","Otro"];
+const MOTIVOS_MERMA=["Golpeada / aplastada","Pasada / madura","Caducó","Se cayó / accidente","Error al preparar","Otro"];
+const unidadesMerma=(insumo)=>insumo==="Fresa"?["kg","caja"]:["kg","L","pz"];
+const MFORM0={fecha:yesterdayISO(),sucursal_id:null,insumo:"Fresa",insumo_otro:"",unidad:"kg",cantidad:"",motivo:"",costo_unit:"",quien:"",nota:""};
 // Config por defecto del pago semanal: 1 = lunes (0=domingo … 6=sábado)
 const SEMANAL_DEFAULT={dia:1};
 
@@ -191,6 +210,9 @@ export default function App(){
   const[gastos,setGastos]=useState([]);
   const[ventas,setVentas]=useState([]);
   const[recolecciones,setRecolecciones]=useState([]);
+  const[mermas,setMermas]=useState([]);
+  const[mForm,setMForm]=useState(MFORM0);
+  const[mSaved,setMSaved]=useState(false);
   const[sucursales,setSucursales]=useState([]);
   const[cats,setCats]=useState(CATS_DEFAULT);
   // sucursalActiva: null = todas. Persistida en localStorage.
@@ -270,6 +292,7 @@ export default function App(){
   const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});if(data)setGastos(data);};
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
+  const fetchM=async()=>{const{data}=await sb.from("mermas").select("*").order("fecha",{ascending:false});if(data)setMermas(data);};
   const fetchS=async()=>{const{data}=await sb.from("sucursales").select("*").order("orden",{ascending:true});if(data)setSucursales(data);};
   const fetchC=async()=>{
     const{data}=await sb.from("categorias").select("*").order("orden",{ascending:true});
@@ -290,6 +313,12 @@ export default function App(){
     }
     if(view==="ventas"&&sucursalActiva!=null){
       setVForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="merma"&&sucursalActiva!=null){
+      setMForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="merma"&&usuarioActual){
+      setMForm(f=>f.quien?f:{...f,quien:usuarioActual});
     }
     if(view==="recoleccion"&&sucursalActiva!=null){
       setRForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
@@ -313,14 +342,15 @@ export default function App(){
   },[fForm.forma,fForm.fecha,tarjetas]);
 
   useEffect(()=>{
-    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT()]);setLoading(false);})();
+    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT(),fetchM()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
     const chV=sb.channel("v-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"ventas"},fetchV).subscribe();
     const chR=sb.channel("r-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"recolecciones"},fetchR).subscribe();
     const chS=sb.channel("s-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"sucursales"},fetchS).subscribe();
+    const chM=sb.channel("m-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"mermas"},fetchM).subscribe();
     const chC=sb.channel("c-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"categorias"},fetchC).subscribe();
-    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);};
+    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);sb.removeChannel(chM);};
   },[]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
@@ -505,6 +535,55 @@ export default function App(){
     if(data)setVentas(data);
     setVSaved(true);
     setTimeout(()=>{setVSaved(false);setVForm(VFORM0);setView("inicio");},1200);
+  };
+
+  // ── MERMA ─────────────────────────────────────────────────────────────────
+  // Última compra de fresa (de esa sucursal si hay; si no, la más reciente de cualquiera)
+  const ultimaFresa=(sucId)=>{
+    const f=gastos.filter(g=>num(g.kg)>0&&num(g.monto)>0).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    return f.find(g=>g.sucursal_id===sucId)||f[0]||null;
+  };
+  const infoFresa=(sucId)=>{
+    const u=ultimaFresa(sucId);if(!u)return null;
+    const kgCaja=num(u.tipo_caja)||(num(u.cajas)?num(u.kg)/num(u.cajas):0);
+    return{precioKg:num(u.monto)/num(u.kg),kgCaja,fecha:u.fecha};
+  };
+  // Costo unitario que se usará: fresa sale de la compra; lo demás del campo o de la última merma igual
+  const costoMerma=(f)=>{
+    const ins=f.insumo==="Otro"?(f.insumo_otro||"").trim():f.insumo;
+    if(f.insumo==="Fresa"){
+      const i=infoFresa(f.sucursal_id);if(!i)return null;
+      return f.unidad==="caja"?i.precioKg*i.kgCaja:i.precioKg;
+    }
+    if(f.costo_unit!=="")return num(f.costo_unit)||null;
+    const prev=mermas.find(m=>norm(m.insumo)===norm(ins)&&m.unidad===f.unidad&&m.costo_unit!=null);
+    return prev?num(prev.costo_unit):null;
+  };
+  const kgMerma=(f)=>{
+    if(f.unidad==="kg")return num(f.cantidad);
+    if(f.insumo==="Fresa"&&f.unidad==="caja"){const i=infoFresa(f.sucursal_id);return i?.kgCaja?num(f.cantidad)*i.kgCaja:null;}
+    return null;
+  };
+  const saveMerma=async()=>{
+    const ins=mForm.insumo==="Otro"?(mForm.insumo_otro||"").trim():mForm.insumo;
+    if(!mForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
+    if(!ins||!(num(mForm.cantidad)>0))return;
+    const cu=costoMerma(mForm);
+    const payload={fecha:mForm.fecha,sucursal_id:mForm.sucursal_id,insumo:ins,cantidad:num(mForm.cantidad),
+      unidad:mForm.unidad,kg:kgMerma(mForm),motivo:mForm.motivo||null,
+      costo_unit:cu!=null?+cu.toFixed(2):null,monto:cu!=null?+(cu*num(mForm.cantidad)).toFixed(2):null,
+      quien:mForm.quien||usuarioActual||null,nota:mForm.nota||null};
+    const{error:e}=await sb.from("mermas").insert([payload]);
+    if(e){setError("Error: "+e.message);return;}
+    await fetchM();
+    setMSaved(true);
+    // Se queda en la pantalla para capturar otro insumo del mismo día
+    setTimeout(()=>{setMSaved(false);setMForm(f=>({...f,cantidad:"",motivo:"",nota:"",costo_unit:"",insumo_otro:""}));},1000);
+  };
+  const deleteMerma=async(id)=>{
+    if(!window.confirm("¿Eliminar este registro de merma?"))return;
+    await sb.from("mermas").delete().eq("id",id);
+    await fetchM();
   };
 
   // ── RECOLECCIONES ─────────────────────────────────────────────────────────
@@ -1110,6 +1189,115 @@ export default function App(){
   );
 
   // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: MERMA DEL DÍA
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="merma"){
+    const verNum=PUEDE_VER_NUMEROS.includes(usuarioActual);
+    const cu=costoMerma(mForm);
+    const iF=infoFresa(mForm.sucursal_id);
+    const valor=cu!=null&&num(mForm.cantidad)>0?cu*num(mForm.cantidad):null;
+    const kgPrev=kgMerma(mForm);
+    const delDia=mermas.filter(m=>m.fecha===mForm.fecha&&m.sucursal_id===mForm.sucursal_id);
+    const insNombre=mForm.insumo==="Otro"?(mForm.insumo_otro||"").trim():mForm.insumo;
+    const listo=mForm.sucursal_id&&insNombre&&num(mForm.cantidad)>0;
+    return(
+    <Screen title="Merma del día" onBack={()=>{setMForm(MFORM0);setView("inicio");}}>
+      <div style={{...S.infoBox,marginBottom:16}}>🗑️ Registra lo que se tiró. No es un gasto nuevo (ya se pagó en la compra): sirve para ver cuánto se pierde por tienda.</div>
+      <FL>📍 Sucursal *</FL>
+      <SucursalChips sucursales={sucActivas} value={mForm.sucursal_id}
+        onChange={(id)=>setMForm(f=>({...f,sucursal_id:id}))}/>
+      <FL>Fecha</FL>
+      <div style={{...S.chipRow,marginBottom:8}}>
+        <Chip active={mForm.fecha===yesterdayISO()} color={ROSA} onClick={()=>setMForm(f=>({...f,fecha:yesterdayISO()}))}>Ayer</Chip>
+        <Chip active={mForm.fecha===todayISO()} color={ROSA} onClick={()=>setMForm(f=>({...f,fecha:todayISO()}))}>Hoy</Chip>
+      </div>
+      <input type="date" style={S.input} value={mForm.fecha} onChange={e=>setMForm(f=>({...f,fecha:e.target.value}))}/>
+
+      <FL>¿Qué se tiró? *</FL>
+      <div style={S.chipRow}>{INSUMOS_MERMA.map(o=><Chip key={o} active={mForm.insumo===o} color={ROSA}
+        onClick={()=>setMForm(f=>({...f,insumo:o,unidad:unidadesMerma(o)[0],costo_unit:""}))}>{o==="Fresa"?"🍓 Fresa":o}</Chip>)}</div>
+      {mForm.insumo==="Otro"&&(
+        <input style={{...S.input,marginTop:8}} placeholder="¿Qué insumo?" value={mForm.insumo_otro}
+          onChange={e=>setMForm(f=>({...f,insumo_otro:e.target.value}))}/>
+      )}
+
+      <FL>Cantidad *</FL>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <input type="number" inputMode="decimal" style={{...S.input,flex:1,fontSize:24,fontWeight:800,color:ROSA}}
+          placeholder="0" value={mForm.cantidad} onChange={e=>setMForm(f=>({...f,cantidad:e.target.value}))}/>
+        <div style={{display:"flex",gap:6}}>{unidadesMerma(mForm.insumo).map(u=>(
+          <Chip key={u} active={mForm.unidad===u} color={ROSA} onClick={()=>setMForm(f=>({...f,unidad:u,costo_unit:""}))}>
+            {u==="caja"&&iF?.kgCaja?`caja (${+iF.kgCaja.toFixed(1)} kg)`:u}
+          </Chip>))}</div>
+      </div>
+      {mForm.insumo==="Fresa"&&mForm.unidad==="caja"&&kgPrev!=null&&num(mForm.cantidad)>0&&(
+        <div style={{fontSize:12,color:GRIS_TEXT,marginTop:6}}>= {+kgPrev.toFixed(2)} kg de fresa</div>
+      )}
+
+      <FL>Motivo</FL>
+      <div style={S.chipRow}>{MOTIVOS_MERMA.map(o=><Chip key={o} active={mForm.motivo===o} color={GRIS_MED}
+        onClick={()=>setMForm(f=>({...f,motivo:f.motivo===o?"":o}))}>{o}</Chip>)}</div>
+
+      {verNum&&mForm.insumo!=="Fresa"&&(
+        <>
+          <FL>$ por {mForm.unidad} (opcional)</FL>
+          <input type="number" inputMode="decimal" style={S.input}
+            placeholder={cu!=null?`Último: ${fmtMXN(+cu.toFixed(2))}`:"Ej: 60"}
+            value={mForm.costo_unit} onChange={e=>setMForm(f=>({...f,costo_unit:e.target.value}))}/>
+        </>
+      )}
+      {verNum&&(
+        <div style={{background:ROSA_BG,border:`1px solid ${ROSA}33`,borderRadius:14,padding:"14px 16px",marginTop:16}}>
+          <div style={{fontSize:11,color:ROSA,fontWeight:800,letterSpacing:0.5}}>VALOR DE LA MERMA</div>
+          <div style={{fontSize:28,fontWeight:900,color:ROSA_DARK,lineHeight:1.2}}>{valor!=null?fmtMXN(+valor.toFixed(2)):"—"}</div>
+          <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
+            {mForm.insumo==="Fresa"
+              ?(iF?`Con la última compra (${iF.fecha}): ${fmtMXN(+iF.precioKg.toFixed(2))}/kg`:"Aún no hay compras de fresa para calcular el precio")
+              :(cu!=null?`${fmtMXN(+cu.toFixed(2))} por ${mForm.unidad}`:"Sin costo: se guarda la cantidad sin valor en pesos")}
+          </div>
+        </div>
+      )}
+
+      <FL>¿Quién registra?</FL>
+      <div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={mForm.quien===o} color={ROSA} onClick={()=>setMForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+      <FL>Nota</FL>
+      <textarea style={{...S.input,height:56,resize:"none"}} value={mForm.nota} onChange={e=>setMForm(f=>({...f,nota:e.target.value}))}/>
+      {error&&<div style={S.errorBanner}>{error}</div>}
+      <button onClick={saveMerma} disabled={!listo}
+        style={{...S.btnPri,opacity:listo?1:0.4,background:mSaved?VERDE:ROSA}}>
+        {mSaved?"✅ ¡Guardada!":!mForm.sucursal_id?"Selecciona una sucursal":"Guardar merma"}
+      </button>
+
+      {mForm.sucursal_id&&delDia.length>0&&(
+        <>
+          <ST>Merma de {sucName(mForm.sucursal_id)} · {mForm.fecha}</ST>
+          <div style={{background:BLANCO,borderRadius:14,padding:"6px 14px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+            {delDia.map((m,i)=>(
+              <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<delDia.length-1?"1px solid #F0F0F0":"none"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:800,color:GRIS_DARK}}>{m.insumo} · {+num(m.cantidad).toFixed(2)} {m.unidad}</div>
+                  <div style={{fontSize:11,color:GRIS_TEXT}}>{[m.motivo,m.quien].filter(Boolean).join(" · ")||"—"}</div>
+                </div>
+                {verNum&&<div style={{fontSize:14,fontWeight:900,color:ROSA}}>{m.monto!=null?fmtMXN(num(m.monto)):"—"}</div>}
+                {(verNum||m.quien===usuarioActual)&&(
+                  <button onClick={()=>deleteMerma(m.id)} style={{background:"none",border:"none",color:"#CCC",fontSize:16,cursor:"pointer",padding:4}}>✕</button>
+                )}
+              </div>
+            ))}
+            {verNum&&(
+              <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 6px",borderTop:"1px solid #F0F0F0",fontSize:13,fontWeight:900}}>
+                <span style={{color:GRIS_MED}}>Total del día</span>
+                <span style={{color:ROSA_DARK}}>{fmtMXN(+delDia.reduce((a,m)=>a+num(m.monto),0).toFixed(2))}</span>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Screen>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // VISTA: VENTA DEL DÍA
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="ventas")return(
@@ -1545,7 +1733,7 @@ export default function App(){
     const diffGastos=diff(tg,tgPrev);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats,mermas)}/>}>
 
         {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
         <div style={{marginBottom:14}}>
@@ -1719,7 +1907,8 @@ export default function App(){
                 // Pendiente: días con venta en esta sucursal cuya (fecha,suc) no esté cubierta por una reco de la misma suc
                 const recosSucCubre=recolecciones.filter(r=>r.sucursal_id===s.id).flatMap(r=>r.fechas_cubiertas||[]);
                 const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+efectivoEsperado(v),0);
-                return{s,gt,vt,rt,ge,balance:vt-gt,balanceEf:vt-ge,pend};
+                const mt=mermas.filter(m=>m.sucursal_id===s.id&&monthKey(m.fecha)===mk).reduce((a,m)=>a+num(m.monto),0);
+                return{s,gt,vt,rt,ge,mt,balance:vt-gt,balanceEf:vt-ge,pend};
               }).filter(f=>f.gt>0||f.vt>0||f.rt>0); // ocultar sucursales sin movimiento
               if(filas.length<2)return null;
               const maxGT=Math.max(...filas.map(f=>f.gt),1);
@@ -1759,9 +1948,64 @@ export default function App(){
                         <div style={{display:"flex",gap:8,marginTop:6,fontSize:10,color:GRIS_TEXT}}>
                           <span>Recolectado: <strong style={{color:AZUL}}>{fmtMXN(f.rt)}</strong></span>
                           {f.pend>0&&<span>Pendiente: <strong style={{color:AMBAR}}>{fmtMXN(f.pend)}</strong></span>}
+                          {f.mt>0&&<span>Merma: <strong style={{color:ROSA_DARK}}>{fmtMXN(+f.mt.toFixed(0))}</strong></span>}
                         </div>
                       </div>
                     ))}
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* ── MERMA DEL MES ── */}
+            {(()=>{
+              const mMes=filtroSuc(mermas).filter(m=>monthKey(m.fecha)===mk);
+              if(mMes.length===0)return null;
+              const tM=mMes.reduce((a,m)=>a+num(m.monto),0);
+              const kgTirados=mMes.filter(m=>m.insumo==="Fresa").reduce((a,m)=>a+num(m.kg),0);
+              const kgComprados=gMes(mk).filter(g=>num(g.kg)>0).reduce((a,g)=>a+num(g.kg),0);
+              const pctFresa=kgComprados?(kgTirados/kgComprados)*100:null;
+              const sinValor=mMes.filter(m=>m.monto==null).length;
+              const porSucM={};mMes.forEach(m=>{porSucM[m.sucursal_id]=(porSucM[m.sucursal_id]||0)+num(m.monto);});
+              const filasS=Object.entries(porSucM).map(([id,v])=>({id:Number(id),v})).sort((a,b)=>b.v-a.v);
+              const maxS=Math.max(...filasS.map(f=>f.v),1);
+              const porIns={};mMes.forEach(m=>{porIns[m.insumo]=(porIns[m.insumo]||0)+num(m.monto);});
+              const topIns=Object.entries(porIns).sort((a,b)=>b[1]-a[1]).slice(0,4);
+              const porMot={};mMes.forEach(m=>{const k=m.motivo||"Sin motivo";porMot[k]=(porMot[k]||0)+1;});
+              const topMot=Object.entries(porMot).sort((a,b)=>b[1]-a[1]).slice(0,3);
+              return(
+                <>
+                  <ST>🗑️ Merma del mes</ST>
+                  <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderTop:`3px solid ${ROSA}`}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800}}>VALOR TIRADO</div>
+                        <div style={{fontSize:20,fontWeight:900,color:ROSA_DARK}}>{fmtMXN(+tM.toFixed(0))}</div>
+                        <div style={{fontSize:10,color:GRIS_TEXT}}>{mMes.length} registros</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800}}>FRESA TIRADA</div>
+                        <div style={{fontSize:20,fontWeight:900,color:GRIS_DARK}}>{+kgTirados.toFixed(1)} kg</div>
+                        <div style={{fontSize:10,color:GRIS_TEXT}}>{pctFresa!=null?`${pctFresa.toFixed(1)}% de ${+kgComprados.toFixed(0)} kg comprados`:"sin compras registradas"}</div>
+                      </div>
+                    </div>
+                    {sucursalActiva==null&&filasS.length>1&&filasS.map(f=>(
+                      <div key={f.id} style={{marginBottom:8}}>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                          <span style={{fontWeight:700,color:GRIS_DARK}}>{sucEmoji(f.id)} {sucName(f.id)}</span>
+                          <span style={{fontWeight:800,color:ROSA}}>{fmtMXN(+f.v.toFixed(0))}</span>
+                        </div>
+                        <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${Math.round((f.v/maxS)*100)}%`,background:ROSA,borderRadius:3}}/>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{fontSize:11,color:GRIS_MED,marginTop:8,lineHeight:1.5}}>
+                      <div><strong>Qué se tira:</strong> {topIns.map(([k,v])=>`${k} ${fmtMXN(+v.toFixed(0))}`).join(" · ")}</div>
+                      <div><strong>Por qué:</strong> {topMot.map(([k,v])=>`${k} (${v})`).join(" · ")}</div>
+                      {sinValor>0&&<div style={{color:GRIS_TEXT}}>{sinValor} registro{sinValor!==1?"s":""} sin valor en pesos (insumo sin costo)</div>}
+                      <div style={{color:GRIS_TEXT,marginTop:4}}>Informativo: no se suma a gastos porque ya está en la compra.</div>
+                    </div>
                   </div>
                 </>
               );
@@ -1993,7 +2237,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
-      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)}/>}>
+      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats,mermas)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
         <button key={mk} onClick={()=>{setSelMonth(mk);setView("detalle");}} style={S.monthCard}>
           <div>
@@ -2018,7 +2262,7 @@ export default function App(){
     const lista=gMes(mk).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return(
       <Screen title={monthLabel(mk)} onBack={()=>setView("historial")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats,mermas)}/>}>
         <div style={S.heroCard}>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Total del mes</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(tg)}</div>
@@ -2085,7 +2329,7 @@ export default function App(){
     const maxAvgDia=Math.max(...avgPorDia,1);
 
     return(
-      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)} label="📥 Excel"/>}>
+      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats,mermas)} label="📥 Excel"/>}>
 
         {/* KPIs del mes */}
         <ST>📅 Este mes — {monthLabel(mk)}</ST>
@@ -2351,6 +2595,12 @@ export default function App(){
             border:`2px solid ${ROSA}`,boxShadow:"0 4px 14px rgba(232,23,93,0.12)"}}>
           <span style={{fontSize:22}}>🍓</span>
           <span style={{fontSize:15,fontWeight:800}}>Compra de fresa</span>
+        </button>
+        <button onClick={()=>setView("merma")}
+          style={{...S.fabBig,padding:"12px 0",fontSize:14,background:BLANCO,color:GRIS_MED,
+            border:"1.5px solid #E0E0E0",boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
+          <span style={{fontSize:20}}>🗑️</span>
+          <span style={{fontSize:14,fontWeight:800}}>Merma del día</span>
         </button>
         <div style={{display:"flex",gap:10}}>
           <button onClick={()=>setView("ventas")} style={{...S.fabMini,background:`linear-gradient(135deg,${VERDE},#1B5E20)`,boxShadow:"0 6px 18px rgba(46,125,50,0.3)"}}>
