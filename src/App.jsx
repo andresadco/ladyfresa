@@ -207,13 +207,13 @@ const SEMANAL_DEFAULT={dia:1};
 
 export default function App(){
   const[view,setView]=useState("inicio");
-  const[gastos,setGastos]=useState([]);
-  const[ventas,setVentas]=useState([]);
-  const[recolecciones,setRecolecciones]=useState([]);
-  const[mermas,setMermas]=useState([]);
+  const[gastosRaw,setGastos]=useState([]);
+  const[ventasRaw,setVentas]=useState([]);
+  const[recoleccionesRaw,setRecolecciones]=useState([]);
+  const[mermasRaw,setMermas]=useState([]);
   const[mForm,setMForm]=useState(MFORM0);
   const[mSaved,setMSaved]=useState(false);
-  const[sucursales,setSucursales]=useState([]);
+  const[sucursalesRaw,setSucursales]=useState([]);
   const[cats,setCats]=useState(CATS_DEFAULT);
   // sucursalActiva: null = todas. Persistida en localStorage.
   const[sucursalActiva,setSucursalActivaState]=useState(()=>{
@@ -225,6 +225,28 @@ export default function App(){
     if(id==null)localStorage.removeItem("lf_sucursal_activa");
     else localStorage.setItem("lf_sucursal_activa",String(id));
   };
+  // ── EMPRESA ───────────────────────────────────────────────────────────────
+  // G1 = Groventia 1 (tiendas propias) · G2 = Groventia Group (tiendas con inversionistas).
+  // Cada empresa ve SOLO sus sucursales, gastos, ventas, recolecciones y mermas:
+  // los totales de "Todas" y los Excel nunca mezclan las dos.
+  const[empresaActiva,setEmpresaActivaState]=useState(()=>localStorage.getItem("lf_empresa")||"G1");
+  const setEmpresaActiva=(e)=>{
+    setEmpresaActivaState(e);localStorage.setItem("lf_empresa",e);
+    setSucursalActiva(null);
+  };
+  const hayG2=sucursalesRaw.some(s=>empresaDe(s)==="G2");
+  const sucursales=sucursalesRaw.filter(s=>empresaDe(s)===empresaActiva);
+  const idsEmpresa=new Set(sucursales.map(s=>s.id));
+  const deEmpresa=(x)=>idsEmpresa.has(x.sucursal_id);
+  const gastos=gastosRaw.filter(deEmpresa);
+  const ventas=ventasRaw.filter(deEmpresa);
+  const recolecciones=recoleccionesRaw.filter(deEmpresa);
+  const mermas=mermasRaw.filter(deEmpresa);
+  // Si la sucursal guardada en el teléfono es de la otra empresa, regresar a "Todas"
+  useEffect(()=>{
+    if(sucursalActiva!=null&&sucursalesRaw.length>0&&!sucursalesRaw.some(s=>s.id===sucursalActiva&&empresaDe(s)===empresaActiva))
+      setSucursalActiva(null);
+  },[sucursalesRaw,empresaActiva,sucursalActiva]);
   const[loading,setLoading]=useState(true);
   const[usuarioActual,setUsuarioActual]=useState(()=>localStorage.getItem("lf_usuario")||null);
   const[selMonth,setSelMonth]=useState(null);
@@ -2487,7 +2509,7 @@ export default function App(){
       <AdminSucursalesView
         sucursales={sucursales} setView={setView}
         sucursalActiva={sucursalActiva} setSucursalActiva={setSucursalActiva}
-        onChange={fetchS}
+        onChange={fetchS} empresaActiva={empresaActiva}
         gastos={gastos} ventas={ventas} recolecciones={recolecciones}/>
     );
   }
@@ -2552,7 +2574,8 @@ export default function App(){
         setSucursalActiva={setSucursalActiva}
         puedeAdmin={PUEDE_ADMIN_SUC.includes(usuarioActual)}
         onAdmin={()=>setView("admin-sucursales")}
-        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}/>
+        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}
+        hayG2={hayG2} empresaActiva={empresaActiva} setEmpresaActiva={setEmpresaActiva}/>
 
       <div style={S.hero}>
         <div style={S.heroDate}>{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"})}</div>
@@ -2666,10 +2689,28 @@ function SucursalChips({sucursales,value,onChange}){
 }
 
 // Barra horizontal de sucursales en el inicio (incluye "Todas" + botón admin)
-function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat}){
+const EMPRESAS={G1:"Groventia 1",G2:"Groventia Group"};
+function empresaDe(s){return s?.empresa||"G1";}
+function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat,hayG2,empresaActiva,setEmpresaActiva}){
   const activas=sucursales.filter(s=>s.activa!==false);
   if(activas.length===0&&!puedeAdmin)return null;
   return(
+    <>
+    {hayG2&&(
+      <div style={{background:"#FFF",padding:"10px 14px 0",display:"flex",gap:6}}>
+        {Object.entries(EMPRESAS).map(([k,label])=>{
+          const sel=empresaActiva===k;
+          return(
+            <button key={k} onClick={()=>setEmpresaActiva(k)}
+              style={{flex:1,padding:"8px 10px",borderRadius:12,border:sel?"2px solid #E8175D":"1.5px solid #E0E0E0",
+                background:sel?"#E8175D":"#FFF",color:sel?"#FFF":"#555",
+                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              🏢 {label}
+            </button>
+          );
+        })}
+      </div>
+    )}
     <div style={{background:"#FFF",padding:"10px 14px",borderBottom:"1px solid #F0F0F0",display:"flex",gap:8,overflowX:"auto",alignItems:"center"}}>
       <span style={{fontSize:11,fontWeight:800,color:"#888",textTransform:"uppercase",letterSpacing:0.6,flexShrink:0}}>Sucursal:</span>
       <button onClick={()=>setSucursalActiva(null)}
@@ -2710,12 +2751,13 @@ function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onA
         </>
       )}
     </div>
+    </>
   );
 }
 
 // Pantalla completa de Recolección con manejo de sucursal
 // Panel admin de sucursales (crear/editar/desactivar/eliminar)
-function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiva,onChange,gastos,ventas,recolecciones}){
+function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiva,onChange,gastos,ventas,recolecciones,empresaActiva="G1"}){
   const[modo,setModo]=useState(null); // null | "nueva" | objeto sucursal en edición
   const[form,setForm]=useState({nombre:"",emoji:"🍓",color:SUC_COLORS[0],orden:0,activa:true});
   const[saving,setSaving]=useState(false);
@@ -2741,7 +2783,7 @@ function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiv
     setSaving(true);
     let e;
     if(modo==="nueva"){
-      ({error:e}=await sb.from("sucursales").insert([{nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}]));
+      ({error:e}=await sb.from("sucursales").insert([{nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa,empresa:empresaActiva}]));
     } else {
       ({error:e}=await sb.from("sucursales").update({nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}).eq("id",modo.id));
     }
