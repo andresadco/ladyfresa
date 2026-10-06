@@ -71,11 +71,24 @@ const monthLabel=(k)=>{
 };
 const addDays=(iso,n)=>{const d=new Date(iso);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
 const diasEntre=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
+const yesterdayISO=()=>addDays(todayISO(),-1);
+// Efectivo que DEBE haber en la caja: lo que entró menos lo que salió
+const efectivoEsperado=(v)=>num(v?.efectivo)-num(v?.salidas);
 const fmtFechaCorta=(iso)=>{
   if(!iso)return"—";
   const[y,m,d]=iso.split("-").map(Number);
   const ms=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
   return`${d} ${ms[m-1]}`;
+};
+// ── PAGO SEMANAL A PROVEEDOR (ej: la fresa se paga todos los lunes) ──────────
+const DIAS_SEMANA=["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+// Siguiente día de la semana DESPUÉS de la fecha dada.
+// Si compras en lunes, el pago cae el lunes siguiente (7 días), no ese mismo día.
+const proximoDiaSemana=(iso,dow)=>{
+  if(!iso||dow==null)return null;
+  const d=new Date(iso+"T12:00:00");
+  const delta=((dow-d.getDay()+7)%7)||7;
+  return addDays(iso,delta);
 };
 // Próxima fecha de corte a partir de una fecha de compra (respeta meses cortos)
 const proximoCorte=(iso,diaCorte)=>{
@@ -103,7 +116,7 @@ const num=(v)=>{const n=parseFloat(v);return isNaN(n)?0:n;};
 const norm=(s)=>(s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const lsSave=(k,d)=>{try{localStorage.setItem(k,JSON.stringify(d));}catch{}};
 
-const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT)=>{
+const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,cats=CATS_DEFAULT,mermas=[])=>{
   const cl=(id)=>cats.find(c=>c.id===id)?.label??id;
   const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
   // Si viene sucursalId, filtra todo a esa sucursal
@@ -134,7 +147,7 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
     wsS=XLSX.utils.json_to_sheet(sRows);
   }
   const vLista=fSuc(ventas).filter(v=>!mk||monthKey(v.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Efectivo ($)":v.efectivo,"Registró":v.quien||"","Nota":v.nota||""})));
+  const wsV=XLSX.utils.json_to_sheet(vLista.map(v=>({"Fecha":v.fecha,"Sucursal":sucName(v.sucursal_id),"Entró ($)":num(v.efectivo),"Salió ($)":num(v.salidas),"Esperado ($)":num(v.efectivo)-num(v.salidas),"¿En qué salió?":v.salidas_nota||"","Registró":v.quien||"","Nota":v.nota||""})));
   const rLista=fSuc(recolecciones);
   const wsC=XLSX.utils.json_to_sheet(rLista.map(r=>({"Fecha":r.fecha_recoleccion,"Sucursal":sucName(r.sucursal_id),"Monto ($)":r.monto_total,"Monto Físico ($)":r.monto_fisico??"","Faltante ($)":r.faltante??"","Quién":r.quien||"","Nota":r.nota||""})));
   // Hoja Fresa: unidad económica (kilos y $/kg) de las compras registradas con cajas
@@ -153,10 +166,24 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
     wsF=XLSX.utils.json_to_sheet(fRows);
     wsF["!cols"]=[{wch:12},{wch:14},{wch:22},{wch:13},{wch:8},{wch:9},{wch:11},{wch:11},{wch:12}];
   }
+  // Hoja Merma: lo que se tiró por día y sucursal (informativo, no se suma a gastos)
+  const mLista=fSuc(mermas).filter(m=>!mk||monthKey(m.fecha)===mk).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  let wsM=null;
+  if(mLista.length>0){
+    const mRows=mLista.map(m=>({"Fecha":m.fecha,"Sucursal":sucName(m.sucursal_id),"Insumo":m.insumo,
+      "Cantidad":num(m.cantidad),"Unidad":m.unidad,"Kg":m.kg!=null?num(m.kg):"","Motivo":m.motivo||"",
+      "$ por unidad":m.costo_unit!=null?num(m.costo_unit):"","Valor ($)":m.monto!=null?num(m.monto):"",
+      "Registró":m.quien||"","Nota":m.nota||""}));
+    const tKgFresa=mLista.filter(m=>m.insumo==="Fresa").reduce((a,m)=>a+num(m.kg),0);
+    mRows.push({"Fecha":"TOTAL","Kg":tKgFresa?`${+tKgFresa.toFixed(2)} kg fresa`:"","Valor ($)":mLista.reduce((a,m)=>a+num(m.monto),0)});
+    wsM=XLSX.utils.json_to_sheet(mRows);
+    wsM["!cols"]=[{wch:12},{wch:14},{wch:16},{wch:9},{wch:7},{wch:14},{wch:20},{wch:12},{wch:11},{wch:12},{wch:22}];
+  }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,wsD,"Gastos");
   XLSX.utils.book_append_sheet(wb,wsR,"Por Categoría");
   if(wsF)XLSX.utils.book_append_sheet(wb,wsF,"Fresa");
+  if(wsM)XLSX.utils.book_append_sheet(wb,wsM,"Merma");
   if(wsS)XLSX.utils.book_append_sheet(wb,wsS,"Por Sucursal");
   XLSX.utils.book_append_sheet(wb,wsV,"Ventas");
   XLSX.utils.book_append_sheet(wb,wsC,"Recolecciones");
@@ -165,18 +192,28 @@ const exportExcel=(gastos,ventas,recolecciones,mk,sucursales=[],sucursalId=null,
 };
 
 const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null,sucursal_id:null};
-const VFORM0={fecha:todayISO(),efectivo:"",quien:"",nota:"",sucursal_id:null};
+const VFORM0={fecha:yesterdayISO(),efectivo:"",salidas:"",salidas_nota:"",quien:"",nota:"",sucursal_id:null};
 const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
 // Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
 const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
-const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"contado",dias_credito:"",quien:"",nota:"",foto:null};
+const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"semanal",dias_credito:"",quien:"",nota:"",foto:null};
+// Merma del día: lo que se tira en tienda (no es gasto nuevo, ya está en la compra)
+const INSUMOS_MERMA=["Fresa","Crema","Yogurt griego","Chocolate","Crumble","Toppings","Desechables","Otro"];
+const MOTIVOS_MERMA=["Golpeada / aplastada","Pasada / madura","Caducó","Se cayó / accidente","Error al preparar","Otro"];
+const unidadesMerma=(insumo)=>insumo==="Fresa"?["kg","caja"]:["kg","L","pz"];
+const MFORM0={fecha:yesterdayISO(),sucursal_id:null,insumo:"Fresa",insumo_otro:"",unidad:"kg",cantidad:"",motivo:"",costo_unit:"",quien:"",nota:""};
+// Config por defecto del pago semanal: 1 = lunes (0=domingo … 6=sábado)
+const SEMANAL_DEFAULT={dia:1};
 
 export default function App(){
   const[view,setView]=useState("inicio");
-  const[gastos,setGastos]=useState([]);
-  const[ventas,setVentas]=useState([]);
-  const[recolecciones,setRecolecciones]=useState([]);
-  const[sucursales,setSucursales]=useState([]);
+  const[gastosRaw,setGastos]=useState([]);
+  const[ventasRaw,setVentas]=useState([]);
+  const[recoleccionesRaw,setRecolecciones]=useState([]);
+  const[mermasRaw,setMermas]=useState([]);
+  const[mForm,setMForm]=useState(MFORM0);
+  const[mSaved,setMSaved]=useState(false);
+  const[sucursalesRaw,setSucursales]=useState([]);
   const[cats,setCats]=useState(CATS_DEFAULT);
   // sucursalActiva: null = todas. Persistida en localStorage.
   const[sucursalActiva,setSucursalActivaState]=useState(()=>{
@@ -188,6 +225,28 @@ export default function App(){
     if(id==null)localStorage.removeItem("lf_sucursal_activa");
     else localStorage.setItem("lf_sucursal_activa",String(id));
   };
+  // ── EMPRESA ───────────────────────────────────────────────────────────────
+  // G1 = Groventia 1 (tiendas propias) · G2 = Groventia Group (tiendas con inversionistas).
+  // Cada empresa ve SOLO sus sucursales, gastos, ventas, recolecciones y mermas:
+  // los totales de "Todas" y los Excel nunca mezclan las dos.
+  const[empresaActiva,setEmpresaActivaState]=useState(()=>localStorage.getItem("lf_empresa")||"G1");
+  const setEmpresaActiva=(e)=>{
+    setEmpresaActivaState(e);localStorage.setItem("lf_empresa",e);
+    setSucursalActiva(null);
+  };
+  const hayG2=sucursalesRaw.some(s=>empresaDe(s)==="G2");
+  const sucursales=sucursalesRaw.filter(s=>empresaDe(s)===empresaActiva);
+  const idsEmpresa=new Set(sucursales.map(s=>s.id));
+  const deEmpresa=(x)=>idsEmpresa.has(x.sucursal_id);
+  const gastos=gastosRaw.filter(deEmpresa);
+  const ventas=ventasRaw.filter(deEmpresa);
+  const recolecciones=recoleccionesRaw.filter(deEmpresa);
+  const mermas=mermasRaw.filter(deEmpresa);
+  // Si la sucursal guardada en el teléfono es de la otra empresa, regresar a "Todas"
+  useEffect(()=>{
+    if(sucursalActiva!=null&&sucursalesRaw.length>0&&!sucursalesRaw.some(s=>s.id===sucursalActiva&&empresaDe(s)===empresaActiva))
+      setSucursalActiva(null);
+  },[sucursalesRaw,empresaActiva,sucursalActiva]);
   const[loading,setLoading]=useState(true);
   const[usuarioActual,setUsuarioActual]=useState(()=>localStorage.getItem("lf_usuario")||null);
   const[selMonth,setSelMonth]=useState(null);
@@ -224,27 +283,38 @@ export default function App(){
   });
   const[fForm,setFForm]=useState(FRESA0);
   const[fSaved,setFSaved]=useState(false);
+  const[semanal,setSemanal]=useState(()=>{
+    try{const v=JSON.parse(localStorage.getItem("lf_semanal")||"null");return v?.dia!=null?v:SEMANAL_DEFAULT;}
+    catch{return SEMANAL_DEFAULT;}
+  });
   const fileRef=useRef();
   const camaraRef=useRef();
 
   // ── TARJETAS (config de corte / días de pago) ─────────────────────────────
   const tarjetaDe=(forma)=>tarjetas.find(t=>t.forma===forma)||null;
   const fetchT=async()=>{
-    const{data,error}=await sb.from("app_config").select("valor").eq("clave","tarjetas").maybeSingle();
-    if(!error&&data?.valor&&Array.isArray(data.valor)&&data.valor.length){
-      setTarjetas(data.valor);lsSave("lf_tarjetas",data.valor);
-    }
+    const{data,error}=await sb.from("app_config").select("clave,valor").in("clave",["tarjetas","pago_semanal"]);
+    if(error||!data)return;
+    const t=data.find(r=>r.clave==="tarjetas")?.valor;
+    if(Array.isArray(t)&&t.length){setTarjetas(t);lsSave("lf_tarjetas",t);}
+    const s=data.find(r=>r.clave==="pago_semanal")?.valor;
+    if(s&&s.dia!=null){setSemanal(s);lsSave("lf_semanal",s);}
   };
-  const saveTarjetas=async(nuevas)=>{
+  const saveTarjetas=async(nuevas,nuevoSemanal)=>{
     setTarjetas(nuevas);lsSave("lf_tarjetas",nuevas);
     // Si la tabla app_config no existe todavía, queda guardado en el dispositivo
     await sb.from("app_config").upsert({clave:"tarjetas",valor:nuevas},{onConflict:"clave"});
+    if(nuevoSemanal){
+      setSemanal(nuevoSemanal);lsSave("lf_semanal",nuevoSemanal);
+      await sb.from("app_config").upsert({clave:"pago_semanal",valor:nuevoSemanal},{onConflict:"clave"});
+    }
   };
 
   // ── SUPABASE ─────────────────────────────────────────────────────────────
   const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});if(data)setGastos(data);};
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
+  const fetchM=async()=>{const{data}=await sb.from("mermas").select("*").order("fecha",{ascending:false});if(data)setMermas(data);};
   const fetchS=async()=>{const{data}=await sb.from("sucursales").select("*").order("orden",{ascending:true});if(data)setSucursales(data);};
   const fetchC=async()=>{
     const{data}=await sb.from("categorias").select("*").order("orden",{ascending:true});
@@ -265,6 +335,12 @@ export default function App(){
     }
     if(view==="ventas"&&sucursalActiva!=null){
       setVForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="merma"&&sucursalActiva!=null){
+      setMForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
+    }
+    if(view==="merma"&&usuarioActual){
+      setMForm(f=>f.quien?f:{...f,quien:usuarioActual});
     }
     if(view==="recoleccion"&&sucursalActiva!=null){
       setRForm(f=>f.sucursal_id?f:{...f,sucursal_id:sucursalActiva});
@@ -288,14 +364,15 @@ export default function App(){
   },[fForm.forma,fForm.fecha,tarjetas]);
 
   useEffect(()=>{
-    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT()]);setLoading(false);})();
+    (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT(),fetchM()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
     const chV=sb.channel("v-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"ventas"},fetchV).subscribe();
     const chR=sb.channel("r-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"recolecciones"},fetchR).subscribe();
     const chS=sb.channel("s-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"sucursales"},fetchS).subscribe();
+    const chM=sb.channel("m-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"mermas"},fetchM).subscribe();
     const chC=sb.channel("c-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"categorias"},fetchC).subscribe();
-    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);};
+    return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);sb.removeChannel(chM);};
   },[]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
@@ -379,8 +456,13 @@ export default function App(){
     if(sinPrecio){setError("Falta el precio por caja");setTimeout(()=>setError(null),3000);return;}
     const quienFinal=usuarioActual==="Apolo"?"Apolo":(fForm.quien||usuarioActual||"");
     const tj=tarjetaDe(fForm.forma);
-    const dias=parseInt(fForm.dias_credito)||0;
-    const vence=fForm.tipo_pago!=="credito"?null
+    // Pago semanal al proveedor: vence el próximo día acordado (por defecto, lunes)
+    const esSemanal=fForm.tipo_pago==="semanal";
+    const fechaSemanal=esSemanal?proximoDiaSemana(fForm.fecha,semanal.dia):null;
+    const tipoDB=esSemanal?"credito":fForm.tipo_pago;
+    const dias=esSemanal?diasEntre(fForm.fecha,fechaSemanal):(parseInt(fForm.dias_credito)||0);
+    const vence=esSemanal?fechaSemanal
+      :fForm.tipo_pago!=="credito"?null
       :tj?vencimientoTarjeta(fForm.fecha,tj)
       :dias?addDays(fForm.fecha,dias):null;
     const grupo="fresa-"+Date.now();
@@ -393,9 +475,9 @@ export default function App(){
       const kg=kgFresaSuc(s.id),monto=totalFresaSuc(s.id);
       return{
         fecha:fForm.fecha,concepto,cat:"fruta",monto,
-        forma:fForm.forma,tipo_pago:fForm.tipo_pago,
+        forma:fForm.forma,tipo_pago:tipoDB,
         dias_credito:dias||null,fecha_vencimiento:vence,
-        pagado:fForm.tipo_pago==="contado",
+        pagado:tipoDB==="contado",
         quien:quienFinal,sucursal_id:s.id,foto:fForm.foto,
         nota:`🍓 ${detalle} · ${kg} kg`+(monto>0?` · ${fmtMXN(+(monto/kg).toFixed(2))}/kg`:"")+(fForm.nota?`\n${fForm.nota}`:""),
         // Columnas nuevas (si aún no existen en Supabase, se guarda igual sin ellas)
@@ -454,24 +536,76 @@ export default function App(){
   const saveVenta=async()=>{
     if(!vForm.efectivo)return;
     if(!vForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
-    const payload={efectivo:parseFloat(vForm.efectivo),quien:vForm.quien,nota:vForm.nota,sucursal_id:vForm.sucursal_id};
+    const payload={efectivo:parseFloat(vForm.efectivo),salidas:num(vForm.salidas)||null,
+      salidas_nota:vForm.salidas_nota||null,quien:vForm.quien,nota:vForm.nota,sucursal_id:vForm.sucursal_id};
     // Buscar si ya existe por fecha + sucursal
     const{data:existing}=await sb.from("ventas").select("id").eq("fecha",vForm.fecha).eq("sucursal_id",vForm.sucursal_id).limit(1);
     let err;
-    if(existing&&existing.length>0){
-      // Actualizar el existente
-      const{error:e}=await sb.from("ventas").update(payload).eq("id",existing[0].id);
-      err=e;
-    } else {
-      // Insertar nuevo
-      const{error:e}=await sb.from("ventas").insert([{...payload,fecha:vForm.fecha}]);
-      err=e;
+    const guardar=async(p)=>{
+      if(existing&&existing.length>0){
+        const{error:e}=await sb.from("ventas").update(p).eq("id",existing[0].id);return e;
+      }
+      const{error:e}=await sb.from("ventas").insert([{...p,fecha:vForm.fecha}]);return e;
+    };
+    err=await guardar(payload);
+    if(err){ // Fallback por si las columnas de salidas aún no existen
+      const{salidas:_s,salidas_nota:_sn,...base}=payload;
+      err=await guardar({...base,nota:[vForm.nota,num(vForm.salidas)>0?`Salidas: ${fmtMXN(num(vForm.salidas))}${vForm.salidas_nota?" — "+vForm.salidas_nota:""}`:""].filter(Boolean).join("\n")});
     }
     if(err){setError("Error: "+err.message);return;}
     const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});
     if(data)setVentas(data);
     setVSaved(true);
     setTimeout(()=>{setVSaved(false);setVForm(VFORM0);setView("inicio");},1200);
+  };
+
+  // ── MERMA ─────────────────────────────────────────────────────────────────
+  // Última compra de fresa (de esa sucursal si hay; si no, la más reciente de cualquiera)
+  const ultimaFresa=(sucId)=>{
+    const f=gastos.filter(g=>num(g.kg)>0&&num(g.monto)>0).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    return f.find(g=>g.sucursal_id===sucId)||f[0]||null;
+  };
+  const infoFresa=(sucId)=>{
+    const u=ultimaFresa(sucId);if(!u)return null;
+    const kgCaja=num(u.tipo_caja)||(num(u.cajas)?num(u.kg)/num(u.cajas):0);
+    return{precioKg:num(u.monto)/num(u.kg),kgCaja,fecha:u.fecha};
+  };
+  // Costo unitario que se usará: fresa sale de la compra; lo demás del campo o de la última merma igual
+  const costoMerma=(f)=>{
+    const ins=f.insumo==="Otro"?(f.insumo_otro||"").trim():f.insumo;
+    if(f.insumo==="Fresa"){
+      const i=infoFresa(f.sucursal_id);if(!i)return null;
+      return f.unidad==="caja"?i.precioKg*i.kgCaja:i.precioKg;
+    }
+    if(f.costo_unit!=="")return num(f.costo_unit)||null;
+    const prev=mermas.find(m=>norm(m.insumo)===norm(ins)&&m.unidad===f.unidad&&m.costo_unit!=null);
+    return prev?num(prev.costo_unit):null;
+  };
+  const kgMerma=(f)=>{
+    if(f.unidad==="kg")return num(f.cantidad);
+    if(f.insumo==="Fresa"&&f.unidad==="caja"){const i=infoFresa(f.sucursal_id);return i?.kgCaja?num(f.cantidad)*i.kgCaja:null;}
+    return null;
+  };
+  const saveMerma=async()=>{
+    const ins=mForm.insumo==="Otro"?(mForm.insumo_otro||"").trim():mForm.insumo;
+    if(!mForm.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
+    if(!ins||!(num(mForm.cantidad)>0))return;
+    const cu=costoMerma(mForm);
+    const payload={fecha:mForm.fecha,sucursal_id:mForm.sucursal_id,insumo:ins,cantidad:num(mForm.cantidad),
+      unidad:mForm.unidad,kg:kgMerma(mForm),motivo:mForm.motivo||null,
+      costo_unit:cu!=null?+cu.toFixed(2):null,monto:cu!=null?+(cu*num(mForm.cantidad)).toFixed(2):null,
+      quien:mForm.quien||usuarioActual||null,nota:mForm.nota||null};
+    const{error:e}=await sb.from("mermas").insert([payload]);
+    if(e){setError("Error: "+e.message);return;}
+    await fetchM();
+    setMSaved(true);
+    // Se queda en la pantalla para capturar otro insumo del mismo día
+    setTimeout(()=>{setMSaved(false);setMForm(f=>({...f,cantidad:"",motivo:"",nota:"",costo_unit:"",insumo_otro:""}));},1000);
+  };
+  const deleteMerma=async(id)=>{
+    if(!window.confirm("¿Eliminar este registro de merma?"))return;
+    await sb.from("mermas").delete().eq("id",id);
+    await fetchM();
   };
 
   // ── RECOLECCIONES ─────────────────────────────────────────────────────────
@@ -482,7 +616,7 @@ export default function App(){
     if(!rForm.selDias.length){setError("Selecciona al menos un día para recolectar");setTimeout(()=>setError(null),3000);return;}
     if(!quienFinal){setError("Indica quién recolecta");setTimeout(()=>setError(null),3000);return;}
     // Los montos vienen de las ventas de ESA sucursal en esas fechas
-    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+num(v?.efectivo);},0);
+    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+efectivoEsperado(v);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
     const requiereAprobacion=quienFinal==="Apolo";
@@ -577,7 +711,7 @@ export default function App(){
   });
   // Lista de fechas (únicas) pendientes — usadas en pantallas de recolección cuando hay sucursal activa
   const diasPendientes=[...new Set(pendVentaIds.map(v=>v.fecha))].sort();
-  const montoPendiente=pendVentaIds.reduce((s,v)=>s+num(v.efectivo),0);
+  const montoPendiente=pendVentaIds.reduce((s,v)=>s+efectivoEsperado(v),0);
   const todayG=gastosF.filter(g=>g.fecha===todayISO());
   const todayTG=todayG.reduce((s,g)=>s+num(g.monto),0);
   const todayV=ventasF.find(v=>v.fecha===todayISO());
@@ -992,8 +1126,9 @@ export default function App(){
       <FL>Tipo de pago</FL>
       <div style={{display:"flex",gap:8,marginBottom:4}}>
         {[
+          {id:"semanal",label:DIAS_SEMANA[semanal.dia]+"s",emoji:"📆",color:AZUL},
           {id:"contado",label:"Contado",emoji:"✅",color:VERDE},
-          {id:"credito",label:"Crédito",emoji:"⏳",color:AMBAR},
+          {id:"credito",label:"Otro plazo",emoji:"⏳",color:AMBAR},
         ].map(t=>(
           <button key={t.id} onClick={()=>setFForm(f=>({...f,tipo_pago:t.id}))}
             style={{flex:1,padding:"10px 4px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",
@@ -1004,6 +1139,33 @@ export default function App(){
           </button>
         ))}
       </div>
+
+      {fForm.tipo_pago==="semanal"&&(()=>{
+        const pago=proximoDiaSemana(fForm.fecha,semanal.dia);
+        const d=diasEntre(fForm.fecha,pago);
+        return(
+          <div style={{background:AZUL_BG,border:`1.5px solid ${AZUL}55`,borderRadius:14,padding:"12px 14px",marginTop:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:900,color:AZUL}}>📆 Pago semanal al proveedor</div>
+              {PUEDE_VER_NUMEROS.includes(usuarioActual)&&(
+                <button onClick={()=>setView("admin-tarjetas")}
+                  style={{background:"none",border:"none",cursor:"pointer",fontSize:11,fontWeight:800,color:AZUL,fontFamily:"inherit"}}>⚙️ Cambiar día</button>
+              )}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              {[{l:"Se paga el",v:fmtFechaCorta(pago)},{l:"Día",v:DIAS_SEMANA[semanal.dia]},{l:"Días",v:`${d}`}].map(x=>(
+                <div key={x.l} style={{flex:1,background:BLANCO,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:GRIS_TEXT,fontWeight:700,textTransform:"uppercase"}}>{x.l}</div>
+                  <div style={{fontSize:14,fontWeight:900,color:AZUL,marginTop:2}}>{x.v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:GRIS_MED,marginTop:8,lineHeight:1.45}}>
+              Queda en Créditos hasta que lo marques pagado. Todo lo que compres esta semana se junta para ese {DIAS_SEMANA[semanal.dia].toLowerCase()}.
+            </div>
+          </div>
+        );
+      })()}
 
       <FL>Forma de pago</FL>
       <div style={S.chipRow}>{FORMA_OPTS.map(o=>(
@@ -1049,26 +1211,168 @@ export default function App(){
   );
 
   // ══════════════════════════════════════════════════════════════════════════
+  // VISTA: MERMA DEL DÍA
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="merma"){
+    const verNum=PUEDE_VER_NUMEROS.includes(usuarioActual);
+    const cu=costoMerma(mForm);
+    const iF=infoFresa(mForm.sucursal_id);
+    const valor=cu!=null&&num(mForm.cantidad)>0?cu*num(mForm.cantidad):null;
+    const kgPrev=kgMerma(mForm);
+    const delDia=mermas.filter(m=>m.fecha===mForm.fecha&&m.sucursal_id===mForm.sucursal_id);
+    const insNombre=mForm.insumo==="Otro"?(mForm.insumo_otro||"").trim():mForm.insumo;
+    const listo=mForm.sucursal_id&&insNombre&&num(mForm.cantidad)>0;
+    return(
+    <Screen title="Merma del día" onBack={()=>{setMForm(MFORM0);setView("inicio");}}>
+      <div style={{...S.infoBox,marginBottom:16}}>🗑️ Registra lo que se tiró. No es un gasto nuevo (ya se pagó en la compra): sirve para ver cuánto se pierde por tienda.</div>
+      <FL>📍 Sucursal *</FL>
+      <SucursalChips sucursales={sucActivas} value={mForm.sucursal_id}
+        onChange={(id)=>setMForm(f=>({...f,sucursal_id:id}))}/>
+      <FL>Fecha</FL>
+      <div style={{...S.chipRow,marginBottom:8}}>
+        <Chip active={mForm.fecha===yesterdayISO()} color={ROSA} onClick={()=>setMForm(f=>({...f,fecha:yesterdayISO()}))}>Ayer</Chip>
+        <Chip active={mForm.fecha===todayISO()} color={ROSA} onClick={()=>setMForm(f=>({...f,fecha:todayISO()}))}>Hoy</Chip>
+      </div>
+      <input type="date" style={S.input} value={mForm.fecha} onChange={e=>setMForm(f=>({...f,fecha:e.target.value}))}/>
+
+      <FL>¿Qué se tiró? *</FL>
+      <div style={S.chipRow}>{INSUMOS_MERMA.map(o=><Chip key={o} active={mForm.insumo===o} color={ROSA}
+        onClick={()=>setMForm(f=>({...f,insumo:o,unidad:unidadesMerma(o)[0],costo_unit:""}))}>{o==="Fresa"?"🍓 Fresa":o}</Chip>)}</div>
+      {mForm.insumo==="Otro"&&(
+        <input style={{...S.input,marginTop:8}} placeholder="¿Qué insumo?" value={mForm.insumo_otro}
+          onChange={e=>setMForm(f=>({...f,insumo_otro:e.target.value}))}/>
+      )}
+
+      <FL>Cantidad *</FL>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <input type="number" inputMode="decimal" style={{...S.input,flex:1,fontSize:24,fontWeight:800,color:ROSA}}
+          placeholder="0" value={mForm.cantidad} onChange={e=>setMForm(f=>({...f,cantidad:e.target.value}))}/>
+        <div style={{display:"flex",gap:6}}>{unidadesMerma(mForm.insumo).map(u=>(
+          <Chip key={u} active={mForm.unidad===u} color={ROSA} onClick={()=>setMForm(f=>({...f,unidad:u,costo_unit:""}))}>
+            {u==="caja"&&iF?.kgCaja?`caja (${+iF.kgCaja.toFixed(1)} kg)`:u}
+          </Chip>))}</div>
+      </div>
+      {mForm.insumo==="Fresa"&&mForm.unidad==="caja"&&kgPrev!=null&&num(mForm.cantidad)>0&&(
+        <div style={{fontSize:12,color:GRIS_TEXT,marginTop:6}}>= {+kgPrev.toFixed(2)} kg de fresa</div>
+      )}
+
+      <FL>Motivo</FL>
+      <div style={S.chipRow}>{MOTIVOS_MERMA.map(o=><Chip key={o} active={mForm.motivo===o} color={GRIS_MED}
+        onClick={()=>setMForm(f=>({...f,motivo:f.motivo===o?"":o}))}>{o}</Chip>)}</div>
+
+      {verNum&&mForm.insumo!=="Fresa"&&(
+        <>
+          <FL>$ por {mForm.unidad} (opcional)</FL>
+          <input type="number" inputMode="decimal" style={S.input}
+            placeholder={cu!=null?`Último: ${fmtMXN(+cu.toFixed(2))}`:"Ej: 60"}
+            value={mForm.costo_unit} onChange={e=>setMForm(f=>({...f,costo_unit:e.target.value}))}/>
+        </>
+      )}
+      {verNum&&(
+        <div style={{background:ROSA_BG,border:`1px solid ${ROSA}33`,borderRadius:14,padding:"14px 16px",marginTop:16}}>
+          <div style={{fontSize:11,color:ROSA,fontWeight:800,letterSpacing:0.5}}>VALOR DE LA MERMA</div>
+          <div style={{fontSize:28,fontWeight:900,color:ROSA_DARK,lineHeight:1.2}}>{valor!=null?fmtMXN(+valor.toFixed(2)):"—"}</div>
+          <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
+            {mForm.insumo==="Fresa"
+              ?(iF?`Con la última compra (${iF.fecha}): ${fmtMXN(+iF.precioKg.toFixed(2))}/kg`:"Aún no hay compras de fresa para calcular el precio")
+              :(cu!=null?`${fmtMXN(+cu.toFixed(2))} por ${mForm.unidad}`:"Sin costo: se guarda la cantidad sin valor en pesos")}
+          </div>
+        </div>
+      )}
+
+      <FL>¿Quién registra?</FL>
+      <div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={mForm.quien===o} color={ROSA} onClick={()=>setMForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
+      <FL>Nota</FL>
+      <textarea style={{...S.input,height:56,resize:"none"}} value={mForm.nota} onChange={e=>setMForm(f=>({...f,nota:e.target.value}))}/>
+      {error&&<div style={S.errorBanner}>{error}</div>}
+      <button onClick={saveMerma} disabled={!listo}
+        style={{...S.btnPri,opacity:listo?1:0.4,background:mSaved?VERDE:ROSA}}>
+        {mSaved?"✅ ¡Guardada!":!mForm.sucursal_id?"Selecciona una sucursal":"Guardar merma"}
+      </button>
+
+      {mForm.sucursal_id&&delDia.length>0&&(
+        <>
+          <ST>Merma de {sucName(mForm.sucursal_id)} · {mForm.fecha}</ST>
+          <div style={{background:BLANCO,borderRadius:14,padding:"6px 14px",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+            {delDia.map((m,i)=>(
+              <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<delDia.length-1?"1px solid #F0F0F0":"none"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:800,color:GRIS_DARK}}>{m.insumo} · {+num(m.cantidad).toFixed(2)} {m.unidad}</div>
+                  <div style={{fontSize:11,color:GRIS_TEXT}}>{[m.motivo,m.quien].filter(Boolean).join(" · ")||"—"}</div>
+                </div>
+                {verNum&&<div style={{fontSize:14,fontWeight:900,color:ROSA}}>{m.monto!=null?fmtMXN(num(m.monto)):"—"}</div>}
+                {(verNum||m.quien===usuarioActual)&&(
+                  <button onClick={()=>deleteMerma(m.id)} style={{background:"none",border:"none",color:"#CCC",fontSize:16,cursor:"pointer",padding:4}}>✕</button>
+                )}
+              </div>
+            ))}
+            {verNum&&(
+              <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 6px",borderTop:"1px solid #F0F0F0",fontSize:13,fontWeight:900}}>
+                <span style={{color:GRIS_MED}}>Total del día</span>
+                <span style={{color:ROSA_DARK}}>{fmtMXN(+delDia.reduce((a,m)=>a+num(m.monto),0).toFixed(2))}</span>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Screen>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // VISTA: VENTA DEL DÍA
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="ventas")return(
     <Screen title="Venta de Efectivo" onBack={()=>{setVForm(VFORM0);setView("inicio");}}>
-      <div style={{...S.infoBox,marginBottom:16}}>💵 Registra el efectivo del día para cuadrar la recolección.</div>
+      <div style={{...S.infoBox,marginBottom:16}}>💵 Registra lo que entró y lo que salió de la caja. El esperado es lo que se debe recolectar.</div>
       <FL>📍 Sucursal *</FL>
       <SucursalChips sucursales={sucActivas} value={vForm.sucursal_id}
         onChange={(id)=>setVForm(f=>({...f,sucursal_id:id}))}/>
       <FL>Fecha</FL>
+      <div style={{...S.chipRow,marginBottom:8}}>
+        <Chip active={vForm.fecha===yesterdayISO()} color={VERDE} onClick={()=>setVForm(f=>({...f,fecha:yesterdayISO()}))}>Ayer</Chip>
+        <Chip active={vForm.fecha===todayISO()} color={VERDE} onClick={()=>setVForm(f=>({...f,fecha:todayISO()}))}>Hoy</Chip>
+      </div>
       <input type="date" style={S.input} value={vForm.fecha} onChange={e=>setVForm(f=>({...f,fecha:e.target.value}))}/>
       {vForm.sucursal_id&&ventas.find(v=>v.fecha===vForm.fecha&&v.sucursal_id===vForm.sucursal_id)&&(
         <div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:4}}>⚠️ Ya existe venta de {sucName(vForm.sucursal_id)} el {vForm.fecha} — se sobreescribirá</div>
       )}
-      <FL>Efectivo del día ($) *</FL>
+      <FL>💵 Efectivo que entró ($) *</FL>
       <div style={{position:"relative"}}>
         <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:20,fontWeight:800,color:VERDE}}>$</span>
         <input type="number" inputMode="decimal"
           style={{...S.input,paddingLeft:32,fontSize:28,fontWeight:800,color:VERDE}}
           placeholder="0" value={vForm.efectivo} onChange={e=>setVForm(f=>({...f,efectivo:e.target.value}))}/>
       </div>
+
+      <FL>💸 Efectivo que salió de la caja ($)</FL>
+      <div style={{position:"relative"}}>
+        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:20,fontWeight:800,color:vForm.salidas?"#E53935":"#CCC"}}>$</span>
+        <input type="number" inputMode="decimal"
+          style={{...S.input,paddingLeft:32,fontSize:24,fontWeight:800,color:"#E53935"}}
+          placeholder="0" value={vForm.salidas} onChange={e=>setVForm(f=>({...f,salidas:e.target.value}))}/>
+      </div>
+      {num(vForm.salidas)>0&&(
+        <input style={{...S.input,marginTop:8}} placeholder="¿En qué se fue? Ej: fresa, gas, taxi…"
+          value={vForm.salidas_nota} onChange={e=>setVForm(f=>({...f,salidas_nota:e.target.value}))}/>
+      )}
+
+      {/* Efectivo esperado en caja */}
+      <div style={{background:`linear-gradient(135deg,${VERDE},#1B5E20)`,borderRadius:16,padding:"18px 20px",color:BLANCO,marginTop:18,boxShadow:"0 6px 20px rgba(46,125,50,0.25)"}}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.75)",fontWeight:700,letterSpacing:0.5}}>EFECTIVO ESPERADO EN CAJA</div>
+        <div style={{fontSize:36,fontWeight:900,letterSpacing:-1.5,lineHeight:1.15}}>
+          {fmtMXN(num(vForm.efectivo)-num(vForm.salidas))}
+        </div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.8)",marginTop:4}}>
+          {fmtMXN(num(vForm.efectivo))} entró − {fmtMXN(num(vForm.salidas))} salió
+        </div>
+      </div>
+      {num(vForm.salidas)>0&&(
+        <div style={{...S.infoBox,marginTop:10,lineHeight:1.45}}>
+          Si esa salida fue una compra, regístrala también en Gastos para que aparezca en el P&L. Aquí solo sirve para cuadrar la caja.
+        </div>
+      )}
+
       <FL>¿Quién registra?</FL>
       <div style={S.chipRow}>{EQUIPO.map(o=><Chip key={o} active={vForm.quien===o} color={VERDE} onClick={()=>setVForm(f=>({...f,quien:o}))}>{o}</Chip>)}</div>
       <FL>Nota</FL>
@@ -1199,7 +1503,7 @@ export default function App(){
                 <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>Registró: {v?.quien||"—"}</div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <div style={{fontWeight:900,color:VERDE,fontSize:16}}>{fmtMXN(v?.efectivo)}</div>
+                <div style={{fontWeight:900,color:VERDE,fontSize:16}}>{fmtMXN(efectivoEsperado(v))}</div>
                 <span style={{fontSize:11,background:VERDE_BG,color:VERDE,borderRadius:6,padding:"2px 7px",fontWeight:700}}>✓</span>
                 <span style={{color:"#CCC",fontSize:18}}>›</span>
               </div>
@@ -1230,8 +1534,13 @@ export default function App(){
     return(
       <Screen title={`Día · ${selVentaDia}`} onBack={()=>setView(backView)}>
         <div style={{background:`linear-gradient(135deg,${v?VERDE:"#546E7A"},${v?"#1B5E20":"#37474F"})`,borderRadius:18,padding:"22px 20px",color:BLANCO,marginBottom:16,boxShadow:"0 8px 24px rgba(0,0,0,0.15)"}}>
-          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginBottom:4}}>{v?"💵 Venta del día":"📭 Sin registro"}</div>
-          <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{v?fmtMXN(v.efectivo):"$0"}</div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginBottom:4}}>{v?"💵 Efectivo esperado en caja":"📭 Sin registro"}</div>
+          <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{v?fmtMXN(efectivoEsperado(v)):"$0"}</div>
+          {v&&num(v.salidas)>0&&(
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.85)",marginTop:6}}>
+              {fmtMXN(num(v.efectivo))} entró − {fmtMXN(num(v.salidas))} salió{v.salidas_nota?` (${v.salidas_nota})`:""}
+            </div>
+          )}
           {v&&<div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginTop:6}}>Registró: <strong>{v.quien||"—"}</strong></div>}
         </div>
 
@@ -1245,10 +1554,10 @@ export default function App(){
 
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           {v?(
-            <button onClick={()=>{setVForm({fecha:v.fecha,efectivo:String(v.efectivo),quien:v.quien||"",nota:v.nota||""});setView("ventas");}}
+            <button onClick={()=>{setVForm({fecha:v.fecha,efectivo:String(v.efectivo),salidas:v.salidas?String(v.salidas):"",salidas_nota:v.salidas_nota||"",quien:v.quien||"",nota:v.nota||"",sucursal_id:v.sucursal_id||null});setView("ventas");}}
               style={{flex:1,...S.actionBtn,color:AZUL,borderColor:AZUL,background:AZUL_BG}}>✏️ Editar venta</button>
           ):(
-            <button onClick={()=>{setVForm({fecha:selVentaDia,efectivo:"",quien:"",nota:""});setView("ventas");}}
+            <button onClick={()=>{setVForm({...VFORM0,fecha:selVentaDia});setView("ventas");}}
               style={{flex:1,...S.actionBtn,color:VERDE,borderColor:VERDE,background:VERDE_BG}}>+ Registrar venta</button>
           )}
         </div>
@@ -1424,7 +1733,7 @@ export default function App(){
     // Pendiente SOLO del mes seleccionado: días con venta del mes que no estén recolectados
     const diasMesConVenta=ventasMes.map(v=>v.fecha);
     const diasMesPendientes=diasMesConVenta.filter(d=>!diasRecolectados.includes(d));
-    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
+    const pendienteMes=diasMesPendientes.reduce((s,d)=>{const v=ventas.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0);
     // Faltantes del mes (diferencia entre lo que debió recolectarse y lo físico)
     const faltantesMes=recoleccionesMes.reduce((s,r)=>s+num(r.faltante),0);
     // Recolectado por persona en el mes
@@ -1446,7 +1755,7 @@ export default function App(){
     const diffGastos=diff(tg,tgPrev);
     return(
       <Screen title={`Resumen ${monthLabel(mk)}`} onBack={()=>setView("inicio")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats,mermas)}/>}>
 
         {/* ═══ HERO: BALANCES + MINI-CARDS ═══ */}
         <div style={{marginBottom:14}}>
@@ -1619,8 +1928,9 @@ export default function App(){
                 const ge=gMesS.filter(g=>g.forma==="Efectivo").reduce((a,g)=>a+num(g.monto),0);
                 // Pendiente: días con venta en esta sucursal cuya (fecha,suc) no esté cubierta por una reco de la misma suc
                 const recosSucCubre=recolecciones.filter(r=>r.sucursal_id===s.id).flatMap(r=>r.fechas_cubiertas||[]);
-                const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+num(v.efectivo),0);
-                return{s,gt,vt,rt,ge,balance:vt-gt,balanceEf:vt-ge,pend};
+                const pend=vMesS.filter(v=>!recosSucCubre.includes(v.fecha)).reduce((a,v)=>a+efectivoEsperado(v),0);
+                const mt=mermas.filter(m=>m.sucursal_id===s.id&&monthKey(m.fecha)===mk).reduce((a,m)=>a+num(m.monto),0);
+                return{s,gt,vt,rt,ge,mt,balance:vt-gt,balanceEf:vt-ge,pend};
               }).filter(f=>f.gt>0||f.vt>0||f.rt>0); // ocultar sucursales sin movimiento
               if(filas.length<2)return null;
               const maxGT=Math.max(...filas.map(f=>f.gt),1);
@@ -1660,9 +1970,64 @@ export default function App(){
                         <div style={{display:"flex",gap:8,marginTop:6,fontSize:10,color:GRIS_TEXT}}>
                           <span>Recolectado: <strong style={{color:AZUL}}>{fmtMXN(f.rt)}</strong></span>
                           {f.pend>0&&<span>Pendiente: <strong style={{color:AMBAR}}>{fmtMXN(f.pend)}</strong></span>}
+                          {f.mt>0&&<span>Merma: <strong style={{color:ROSA_DARK}}>{fmtMXN(+f.mt.toFixed(0))}</strong></span>}
                         </div>
                       </div>
                     ))}
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* ── MERMA DEL MES ── */}
+            {(()=>{
+              const mMes=filtroSuc(mermas).filter(m=>monthKey(m.fecha)===mk);
+              if(mMes.length===0)return null;
+              const tM=mMes.reduce((a,m)=>a+num(m.monto),0);
+              const kgTirados=mMes.filter(m=>m.insumo==="Fresa").reduce((a,m)=>a+num(m.kg),0);
+              const kgComprados=gMes(mk).filter(g=>num(g.kg)>0).reduce((a,g)=>a+num(g.kg),0);
+              const pctFresa=kgComprados?(kgTirados/kgComprados)*100:null;
+              const sinValor=mMes.filter(m=>m.monto==null).length;
+              const porSucM={};mMes.forEach(m=>{porSucM[m.sucursal_id]=(porSucM[m.sucursal_id]||0)+num(m.monto);});
+              const filasS=Object.entries(porSucM).map(([id,v])=>({id:Number(id),v})).sort((a,b)=>b.v-a.v);
+              const maxS=Math.max(...filasS.map(f=>f.v),1);
+              const porIns={};mMes.forEach(m=>{porIns[m.insumo]=(porIns[m.insumo]||0)+num(m.monto);});
+              const topIns=Object.entries(porIns).sort((a,b)=>b[1]-a[1]).slice(0,4);
+              const porMot={};mMes.forEach(m=>{const k=m.motivo||"Sin motivo";porMot[k]=(porMot[k]||0)+1;});
+              const topMot=Object.entries(porMot).sort((a,b)=>b[1]-a[1]).slice(0,3);
+              return(
+                <>
+                  <ST>🗑️ Merma del mes</ST>
+                  <div style={{background:BLANCO,borderRadius:14,padding:"14px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderTop:`3px solid ${ROSA}`}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800}}>VALOR TIRADO</div>
+                        <div style={{fontSize:20,fontWeight:900,color:ROSA_DARK}}>{fmtMXN(+tM.toFixed(0))}</div>
+                        <div style={{fontSize:10,color:GRIS_TEXT}}>{mMes.length} registros</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:GRIS_TEXT,fontWeight:800}}>FRESA TIRADA</div>
+                        <div style={{fontSize:20,fontWeight:900,color:GRIS_DARK}}>{+kgTirados.toFixed(1)} kg</div>
+                        <div style={{fontSize:10,color:GRIS_TEXT}}>{pctFresa!=null?`${pctFresa.toFixed(1)}% de ${+kgComprados.toFixed(0)} kg comprados`:"sin compras registradas"}</div>
+                      </div>
+                    </div>
+                    {sucursalActiva==null&&filasS.length>1&&filasS.map(f=>(
+                      <div key={f.id} style={{marginBottom:8}}>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                          <span style={{fontWeight:700,color:GRIS_DARK}}>{sucEmoji(f.id)} {sucName(f.id)}</span>
+                          <span style={{fontWeight:800,color:ROSA}}>{fmtMXN(+f.v.toFixed(0))}</span>
+                        </div>
+                        <div style={{height:5,background:"#F0F0F0",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${Math.round((f.v/maxS)*100)}%`,background:ROSA,borderRadius:3}}/>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{fontSize:11,color:GRIS_MED,marginTop:8,lineHeight:1.5}}>
+                      <div><strong>Qué se tira:</strong> {topIns.map(([k,v])=>`${k} ${fmtMXN(+v.toFixed(0))}`).join(" · ")}</div>
+                      <div><strong>Por qué:</strong> {topMot.map(([k,v])=>`${k} (${v})`).join(" · ")}</div>
+                      {sinValor>0&&<div style={{color:GRIS_TEXT}}>{sinValor} registro{sinValor!==1?"s":""} sin valor en pesos (insumo sin costo)</div>}
+                      <div style={{color:GRIS_TEXT,marginTop:4}}>Informativo: no se suma a gastos porque ya está en la compra.</div>
+                    </div>
                   </div>
                 </>
               );
@@ -1894,7 +2259,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="historial"){if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null; return(
     <Screen title="Historial" onBack={()=>setView("inicio")}
-      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)}/>}>
+      action={<ExportBtn label="📥 Todo" onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats,mermas)}/>}>
       {months.length===0?<Empty>Sin registros</Empty>:months.map(mk=>(
         <button key={mk} onClick={()=>{setSelMonth(mk);setView("detalle");}} style={S.monthCard}>
           <div>
@@ -1919,7 +2284,7 @@ export default function App(){
     const lista=gMes(mk).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return(
       <Screen title={monthLabel(mk)} onBack={()=>setView("historial")}
-        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats)}/>}>
+        action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,mk,sucursales,sucursalActiva,cats,mermas)}/>}>
         <div style={S.heroCard}>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Total del mes</div>
           <div style={{fontSize:40,fontWeight:900,letterSpacing:-1.5}}>{fmtMXN(tg)}</div>
@@ -1986,7 +2351,7 @@ export default function App(){
     const maxAvgDia=Math.max(...avgPorDia,1);
 
     return(
-      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats)} label="📥 Excel"/>}>
+      <Screen title="Tendencias 📉" onBack={()=>setView("inicio")} action={<ExportBtn onClick={()=>exportExcel(gastos,ventas,recolecciones,null,sucursales,sucursalActiva,cats,mermas)} label="📥 Excel"/>}>
 
         {/* KPIs del mes */}
         <ST>📅 Este mes — {monthLabel(mk)}</ST>
@@ -2144,7 +2509,7 @@ export default function App(){
       <AdminSucursalesView
         sucursales={sucursales} setView={setView}
         sucursalActiva={sucursalActiva} setSucursalActiva={setSucursalActiva}
-        onChange={fetchS}
+        onChange={fetchS} empresaActiva={empresaActiva}
         gastos={gastos} ventas={ventas} recolecciones={recolecciones}/>
     );
   }
@@ -2166,7 +2531,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="admin-tarjetas"){
     if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
-    return<AdminTarjetasView tarjetas={tarjetas} onSave={saveTarjetas} setView={setView}/>;
+    return<AdminTarjetasView tarjetas={tarjetas} semanal={semanal} onSave={saveTarjetas} setView={setView}/>;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -2209,7 +2574,8 @@ export default function App(){
         setSucursalActiva={setSucursalActiva}
         puedeAdmin={PUEDE_ADMIN_SUC.includes(usuarioActual)}
         onAdmin={()=>setView("admin-sucursales")}
-        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}/>
+        onAdminCat={PUEDE_ADMIN_CAT.includes(usuarioActual)?()=>setView("admin-categorias"):null}
+        hayG2={hayG2} empresaActiva={empresaActiva} setEmpresaActiva={setEmpresaActiva}/>
 
       <div style={S.hero}>
         <div style={S.heroDate}>{new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"})}</div>
@@ -2252,6 +2618,12 @@ export default function App(){
             border:`2px solid ${ROSA}`,boxShadow:"0 4px 14px rgba(232,23,93,0.12)"}}>
           <span style={{fontSize:22}}>🍓</span>
           <span style={{fontSize:15,fontWeight:800}}>Compra de fresa</span>
+        </button>
+        <button onClick={()=>setView("merma")}
+          style={{...S.fabBig,padding:"12px 0",fontSize:14,background:BLANCO,color:GRIS_MED,
+            border:"1.5px solid #E0E0E0",boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
+          <span style={{fontSize:20}}>🗑️</span>
+          <span style={{fontSize:14,fontWeight:800}}>Merma del día</span>
         </button>
         <div style={{display:"flex",gap:10}}>
           <button onClick={()=>setView("ventas")} style={{...S.fabMini,background:`linear-gradient(135deg,${VERDE},#1B5E20)`,boxShadow:"0 6px 18px rgba(46,125,50,0.3)"}}>
@@ -2317,10 +2689,28 @@ function SucursalChips({sucursales,value,onChange}){
 }
 
 // Barra horizontal de sucursales en el inicio (incluye "Todas" + botón admin)
-function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat}){
+const EMPRESAS={G1:"Groventia 1",G2:"Groventia Group"};
+function empresaDe(s){return s?.empresa||"G1";}
+function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onAdmin,onAdminCat,hayG2,empresaActiva,setEmpresaActiva}){
   const activas=sucursales.filter(s=>s.activa!==false);
   if(activas.length===0&&!puedeAdmin)return null;
   return(
+    <>
+    {hayG2&&(
+      <div style={{background:"#FFF",padding:"10px 14px 0",display:"flex",gap:6}}>
+        {Object.entries(EMPRESAS).map(([k,label])=>{
+          const sel=empresaActiva===k;
+          return(
+            <button key={k} onClick={()=>setEmpresaActiva(k)}
+              style={{flex:1,padding:"8px 10px",borderRadius:12,border:sel?"2px solid #E8175D":"1.5px solid #E0E0E0",
+                background:sel?"#E8175D":"#FFF",color:sel?"#FFF":"#555",
+                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
+              🏢 {label}
+            </button>
+          );
+        })}
+      </div>
+    )}
     <div style={{background:"#FFF",padding:"10px 14px",borderBottom:"1px solid #F0F0F0",display:"flex",gap:8,overflowX:"auto",alignItems:"center"}}>
       <span style={{fontSize:11,fontWeight:800,color:"#888",textTransform:"uppercase",letterSpacing:0.6,flexShrink:0}}>Sucursal:</span>
       <button onClick={()=>setSucursalActiva(null)}
@@ -2361,12 +2751,13 @@ function SucursalBar({sucursales,sucursalActiva,setSucursalActiva,puedeAdmin,onA
         </>
       )}
     </div>
+    </>
   );
 }
 
 // Pantalla completa de Recolección con manejo de sucursal
 // Panel admin de sucursales (crear/editar/desactivar/eliminar)
-function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiva,onChange,gastos,ventas,recolecciones}){
+function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiva,onChange,gastos,ventas,recolecciones,empresaActiva="G1"}){
   const[modo,setModo]=useState(null); // null | "nueva" | objeto sucursal en edición
   const[form,setForm]=useState({nombre:"",emoji:"🍓",color:SUC_COLORS[0],orden:0,activa:true});
   const[saving,setSaving]=useState(false);
@@ -2392,7 +2783,7 @@ function AdminSucursalesView({sucursales,setView,sucursalActiva,setSucursalActiv
     setSaving(true);
     let e;
     if(modo==="nueva"){
-      ({error:e}=await sb.from("sucursales").insert([{nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}]));
+      ({error:e}=await sb.from("sucursales").insert([{nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa,empresa:empresaActiva}]));
     } else {
       ({error:e}=await sb.from("sucursales").update({nombre,emoji:form.emoji,color:form.color,orden:form.orden,activa:form.activa}).eq("id",modo.id));
     }
@@ -2863,7 +3254,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
   const recosSuc=sucForm?recolecciones.filter(r=>r.sucursal_id===sucForm):[];
   const diasCubiertos=recosSuc.flatMap(r=>r.fechas_cubiertas||[]);
   const diasPendientesSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).map(v=>v.fecha).sort();
-  const montoPendienteSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).reduce((s,v)=>s+num(v.efectivo),0);
+  const montoPendienteSuc=ventasSuc.filter(v=>!diasCubiertos.includes(v.fecha)).reduce((s,v)=>s+efectivoEsperado(v),0);
 
   return(
     <Screen title="Recolección de Efectivo" onBack={()=>setView("inicio")}>
@@ -2889,7 +3280,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
               {rForm.selDias.length>0&&(
                 <div style={{background:VERDE_BG,borderRadius:12,padding:"14px 16px",marginTop:4,border:"1px solid #A5D6A7",marginBottom:4}}>
                   <div style={{fontSize:12,color:VERDE,fontWeight:700}}>Total a recolectar</div>
-                  <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0))}</div>
+                  <div style={{fontSize:28,fontWeight:900,color:VERDE}}>{fmtMXN(rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0))}</div>
                 </div>
               )}
 
@@ -2906,7 +3297,7 @@ function RecoleccionView({rForm,setRForm,ventas,recolecciones,recoleccionesF,suc
 
               {/* ── MONTO FÍSICO ── */}
               {(()=>{
-                const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+num(v?.efectivo);},0);
+                const montoDeclarado=rForm.selDias.reduce((s,d)=>{const v=ventasSuc.find(v=>v.fecha===d);return s+efectivoEsperado(v);},0);
                 const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
                 const faltante=montoFisico!=null?Math.max(0,montoDeclarado-montoFisico):0;
                 const sobra=montoFisico!=null?Math.max(0,montoFisico-montoDeclarado):0;
@@ -3089,17 +3480,35 @@ function TarjetaCreditoBox({t,fecha,onConfig}){
   );
 }
 
-function AdminTarjetasView({tarjetas,onSave,setView}){
+function AdminTarjetasView({tarjetas,semanal,onSave,setView}){
   const[items,setItems]=useState(tarjetas);
+  const[sem,setSem]=useState(semanal||SEMANAL_DEFAULT);
   const[ok,setOk]=useState(false);
   const set=(i,patch)=>setItems(a=>a.map((t,ix)=>ix===i?{...t,...patch}:t));
   const guardar=async()=>{
-    await onSave(items.map(t=>({...t,dia_corte:Math.min(31,Math.max(1,parseInt(t.dia_corte)||1)),dias_pago:Math.max(0,parseInt(t.dias_pago)||0)})));
+    await onSave(items.map(t=>({...t,dia_corte:Math.min(31,Math.max(1,parseInt(t.dia_corte)||1)),dias_pago:Math.max(0,parseInt(t.dias_pago)||0)})),sem);
     setOk(true);setTimeout(()=>setOk(false),1500);
   };
   const hoy=todayISO();
   return(
-    <Screen title="💳 Tarjetas" onBack={()=>setView("inicio")}>
+    <Screen title="💳 Pagos y tarjetas" onBack={()=>setView("inicio")}>
+      {/* ── Pago semanal al proveedor de fresa ── */}
+      <div style={{background:BLANCO,borderRadius:16,padding:14,marginBottom:18,
+        boxShadow:"0 2px 10px rgba(0,0,0,0.06)",borderLeft:`5px solid ${ROSA}`}}>
+        <div style={{fontSize:14,fontWeight:900,color:GRIS_DARK}}>🍓 Pago semanal al proveedor</div>
+        <div style={{fontSize:11,color:GRIS_TEXT,marginTop:4,lineHeight:1.45}}>
+          Día en que le pagas la fresa cada semana. Las compras se marcan solas para el siguiente.
+        </div>
+        <div style={{...S.chipRow,marginTop:12}}>
+          {DIAS_SEMANA.map((d,i)=>(
+            <Chip key={i} active={sem.dia===i} color={ROSA} onClick={()=>setSem({...sem,dia:i})}>{d.slice(0,3)}</Chip>
+          ))}
+        </div>
+        <div style={{...S.infoBox,marginTop:12}}>
+          Una compra de hoy se pagaría el <strong>{fmtFechaCorta(proximoDiaSemana(hoy,sem.dia))}</strong> · {diasEntre(hoy,proximoDiaSemana(hoy,sem.dia))} días
+        </div>
+      </div>
+
       <div style={{...S.infoBox,marginBottom:6,lineHeight:1.5}}>
         En México el crédito de una tarjeta se cuenta desde la <strong>fecha de corte</strong>, no desde la compra.
         Pon el día de corte y cuántos días naturales te dan para pagar; la app calcula sola el vencimiento de cada gasto.
@@ -3141,7 +3550,7 @@ function AdminTarjetasView({tarjetas,onSave,setView}){
         );
       })}
       <button onClick={guardar} style={{...S.btnPri,background:ok?VERDE:ROSA}}>
-        {ok?"✅ Guardado":"Guardar tarjetas"}
+        {ok?"✅ Guardado":"Guardar configuración"}
       </button>
       <div style={{fontSize:11,color:GRIS_TEXT,marginTop:14,lineHeight:1.6}}>
         <strong>Referencia Amex México:</strong><br/>
@@ -3321,7 +3730,8 @@ function EditableVentasDias({diasPendientes,ventas,rForm,setRForm,setSelVentaDia
                 </div>
                 <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
                   {v?`Registró: ${v.quien||"—"} · `:"Sin registro · "}
-                  <strong style={{color:v?VERDE:"#E53935"}}>{v?fmtMXN(v.efectivo):"$0"}</strong>
+                  <strong style={{color:v?VERDE:"#E53935"}}>{v?fmtMXN(efectivoEsperado(v)):"$0"}</strong>
+                  {num(v?.salidas)>0&&<span style={{color:"#E53935"}}> (−{fmtMXN(num(v.salidas))} de salidas)</span>}
                 </div>
               </button>
               <button onClick={()=>{
