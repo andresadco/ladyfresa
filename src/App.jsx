@@ -2533,6 +2533,10 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: ADMIN DE TARJETAS (solo Andres / José Luis)
   // ══════════════════════════════════════════════════════════════════════════
+  if(view==="inversionistas"){
+    if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
+    return<InversionistasView sucursalesRaw={sucursalesRaw} ventasRaw={ventasRaw} usuarioActual={usuarioActual} setView={setView}/>;
+  }
   if(view==="admin-tarjetas"){
     if(!PUEDE_VER_NUMEROS.includes(usuarioActual))return null;
     return<AdminTarjetasView tarjetas={tarjetas} semanal={semanal} onSave={saveTarjetas} setView={setView}/>;
@@ -2651,6 +2655,7 @@ export default function App(){
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📊" label="Resumen" onClick={()=>setView("resumen")}/>}
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📉" label="Tendencias" onClick={()=>setView("analitica")}/>}
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📅" label="Historial" onClick={()=>setView("historial")}/>}
+        {PUEDE_VER_NUMEROS.includes(usuarioActual)&&hayG2&&<NavBtn icon="🤝" label="Inversión" onClick={()=>setView("inversionistas")}/>}
         <NavBtn icon="💰" label="Recolectar" onClick={()=>setView("recoleccion")}/>
       </nav>
     </div>
@@ -3563,6 +3568,274 @@ function AdminTarjetasView({tarjetas,semanal,onSave,setView}){
         • Tarjetas Corporativas (Corporate, Gold, Platinum Corporate): corte + 9 días naturales, hasta 39 días de financiamiento.<br/>
         Confirma tu día de corte en el estado de cuenta o en la app de Amex — es el dato que hace exacto el cálculo.
       </div>
+    </Screen>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// INVERSIONISTAS (Groventia Group): lo invertido, lo abonado y la venta
+// mensual de Parrot por tienda. Alimenta el tablero del inversionista.
+// Tablas: inversiones · abonos_inversionistas · ventas_mensuales
+// ══════════════════════════════════════════════════════════════════════════
+const CONCEPTOS_INV=[
+  {id:"capex",label:"Obra / equipo"},
+  {id:"guante",label:"Guante"},
+  {id:"capital_trabajo",label:"Capital de trabajo"},
+  {id:"otro",label:"Otro"},
+];
+const mesActual=()=>todayISO().slice(0,7);
+const mesAnterior=()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);};
+// Lee la hoja "Resumen" del Reporte de ventas de Parrot (Concepto | Monto)
+const leerResumenParrot=(wb)=>{
+  const hoja=wb.Sheets["Resumen"]||wb.Sheets[wb.SheetNames.find(n=>norm(n)==="resumen")]||wb.Sheets[wb.SheetNames[0]];
+  const filas=XLSX.utils.sheet_to_json(hoja,{header:1,raw:true});
+  const buscar=(etiqueta)=>{
+    const f=filas.find(r=>norm(r?.[0])===norm(etiqueta));
+    if(!f)return null;
+    const v=f.slice(1).find(c=>c!==null&&c!==""&&!isNaN(parseFloat(String(c).replace(/[$,]/g,""))));
+    return v==null?null:parseFloat(String(v).replace(/[$,]/g,""));
+  };
+  return{
+    venta_bruta:buscar("Venta bruta"),
+    descuentos:buscar("Descuentos totales")??0,
+    venta_total:buscar("Venta total"),
+    venta_neta:buscar("Venta neta"),
+  };
+};
+
+function InversionistasView({sucursalesRaw,ventasRaw,usuarioActual,setView}){
+  const sucG2=sucursalesRaw.filter(s=>empresaDe(s)==="G2");
+  const sucName=(id)=>sucursalesRaw.find(s=>s.id===id)?.nombre||"—";
+  const[tab,setTab]=useState("resumen");
+  const[inv,setInv]=useState([]);
+  const[abo,setAbo]=useState([]);
+  const[vm,setVm]=useState([]);
+  const[err,setErr]=useState(null);
+  const[ok,setOk]=useState(null);
+  const sucDefault=sucG2.length===1?sucG2[0].id:null;
+  const INV0={fecha:todayISO(),sucursal_id:sucDefault,inversionista:"",concepto:"capex",monto:"",recuperable:true,nota:""};
+  const ABO0={fecha:todayISO(),mes:mesAnterior(),sucursal_id:sucDefault,inversionista:"",tipo:"recuperacion",monto:"",forma:"Transferencia",referencia:"",nota:""};
+  const[fi,setFi]=useState(INV0);
+  const[fa,setFa]=useState(ABO0);
+  const[pMes,setPMes]=useState(mesAnterior());
+  const[pSuc,setPSuc]=useState(sucDefault);
+  const[pDatos,setPDatos]=useState(null);
+  const[pArchivo,setPArchivo]=useState("");
+  const pRef=useRef();
+
+  const cargar=async()=>{
+    const[a,b,c]=await Promise.all([
+      sb.from("inversiones").select("*").order("fecha",{ascending:false}),
+      sb.from("abonos_inversionistas").select("*").order("fecha",{ascending:false}),
+      sb.from("ventas_mensuales").select("*").order("mes",{ascending:false}),
+    ]);
+    if(a.error||b.error||c.error){setErr("No se pudo cargar la información. Revisa tu conexión.");return;}
+    setInv(a.data||[]);setAbo(b.data||[]);setVm(c.data||[]);
+  };
+  useEffect(()=>{cargar();},[]);
+  const aviso=(t)=>{setOk(t);setTimeout(()=>setOk(null),1600);};
+  const inversionistas=[...new Set([...inv,...abo].map(x=>x.inversionista).filter(Boolean))];
+
+  // ── Guardar ──
+  const guardarInv=async()=>{
+    setErr(null);
+    if(!fi.sucursal_id)return setErr("Elige la tienda.");
+    if(!(num(fi.monto)>0))return setErr("Pon el monto invertido.");
+    const{error}=await sb.from("inversiones").insert({...fi,monto:num(fi.monto),inversionista:fi.inversionista.trim()||null,nota:fi.nota.trim()||null,quien:usuarioActual});
+    if(error)return setErr("No se guardó: "+error.message);
+    setFi({...INV0,sucursal_id:fi.sucursal_id,inversionista:fi.inversionista});aviso("Inversión guardada");cargar();
+  };
+  const guardarAbo=async()=>{
+    setErr(null);
+    if(!fa.sucursal_id)return setErr("Elige la tienda.");
+    if(!(num(fa.monto)>0))return setErr("Pon el monto abonado.");
+    const{error}=await sb.from("abonos_inversionistas").insert({...fa,monto:num(fa.monto),inversionista:fa.inversionista.trim()||null,referencia:fa.referencia.trim()||null,nota:fa.nota.trim()||null,quien:usuarioActual});
+    if(error)return setErr("No se guardó: "+error.message);
+    setFa({...ABO0,sucursal_id:fa.sucursal_id,inversionista:fa.inversionista});aviso("Abono guardado");cargar();
+  };
+  const borrar=async(tabla,id)=>{
+    if(!window.confirm("¿Seguro que quieres eliminar este registro?"))return;
+    const{error}=await sb.from(tabla).delete().eq("id",id);
+    if(error)return setErr("No se pudo eliminar: "+error.message);
+    cargar();
+  };
+
+  // ── Parrot ──
+  const leerArchivo=async(file)=>{
+    setErr(null);setPDatos(null);
+    if(!file)return;
+    try{
+      const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});
+      const d=leerResumenParrot(wb);
+      if(d.venta_bruta==null||d.venta_total==null){setErr("No encontré la hoja Resumen con Venta bruta y Venta total. ¿Es el Reporte de ventas de Parrot?");return;}
+      setPDatos(d);setPArchivo(file.name);
+    }catch(e){setErr("No se pudo leer el archivo: "+e.message);}
+  };
+  const yaExiste=vm.find(v=>v.mes===pMes&&v.sucursal_id===pSuc);
+  const efectivoMes=ventasRaw.filter(v=>v.sucursal_id===pSuc&&monthKey(v.fecha)===pMes).reduce((s,v)=>s+num(v.efectivo),0);
+  const guardarParrot=async()=>{
+    setErr(null);
+    if(!pSuc)return setErr("Elige la tienda.");
+    if(!pDatos)return setErr("Sube el archivo de Parrot.");
+    if(yaExiste&&!window.confirm(`Ya hay venta de ${sucName(pSuc)} para ${monthLabel(pMes)}. ¿La reemplazo con este archivo?`))return;
+    const{error}=await sb.from("ventas_mensuales").upsert({mes:pMes,sucursal_id:pSuc,...pDatos,archivo:pArchivo,quien:usuarioActual},{onConflict:"mes,sucursal_id"});
+    if(error)return setErr("No se guardó: "+error.message);
+    setPDatos(null);setPArchivo("");if(pRef.current)pRef.current.value="";
+    aviso("Venta del mes guardada");cargar();
+  };
+
+  // ── Resumen por tienda ──
+  const filas=sucG2.map(s=>{
+    const invertido=inv.filter(i=>i.sucursal_id===s.id&&i.recuperable).reduce((t,i)=>t+num(i.monto),0);
+    const recuperado=abo.filter(a=>a.sucursal_id===s.id&&a.tipo==="recuperacion").reduce((t,a)=>t+num(a.monto),0);
+    const dividendos=abo.filter(a=>a.sucursal_id===s.id&&a.tipo==="dividendo").reduce((t,a)=>t+num(a.monto),0);
+    const meta=invertido*0.5;
+    return{s,invertido,meta,recuperado,dividendos,pct:meta>0?Math.min(100,recuperado/meta*100):0};
+  });
+  const T=filas.reduce((t,f)=>({invertido:t.invertido+f.invertido,meta:t.meta+f.meta,recuperado:t.recuperado+f.recuperado,dividendos:t.dividendos+f.dividendos}),{invertido:0,meta:0,recuperado:0,dividendos:0});
+  const pctT=T.meta>0?Math.min(100,T.recuperado/T.meta*100):0;
+
+  const Barra=({pct})=>(
+    <div style={{height:10,borderRadius:99,background:"#F6DDE5",overflow:"hidden",marginTop:8}}>
+      <div style={{width:`${pct}%`,height:"100%",background:ROSA,borderRadius:99}}/>
+    </div>
+  );
+  const SucPicker=({value,onChange})=>(
+    sucG2.length===0
+      ?<div style={S.infoBox}>Todavía no hay tiendas de Groventia Group. Créalas en Sucursales con empresa G2.</div>
+      :<div style={S.chipRow}>{sucG2.map(s=><Chip key={s.id} active={value===s.id} color={ROSA} onClick={()=>onChange(s.id)}>{s.emoji} {s.nombre}{s.activa?"":" (por abrir)"}</Chip>)}</div>
+  );
+  const Fila=({titulo,sub,monto,onDelete})=>(
+    <div style={{...S.card,display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:800,fontSize:14,color:GRIS_DARK}}>{titulo}</div>
+        <div style={{fontSize:12,color:GRIS_TEXT,marginTop:2}}>{sub}</div>
+      </div>
+      <div style={{fontWeight:900,fontSize:15,color:GRIS_DARK}}>{fmtMXN(monto)}</div>
+      <button onClick={onDelete} aria-label="Eliminar" style={{background:"none",border:"none",color:"#BBB",fontSize:18,cursor:"pointer",padding:6}}>✕</button>
+    </div>
+  );
+
+  return(
+    <Screen title="🤝 Inversionistas" onBack={()=>setView("inicio")}>
+      <div style={{...S.chipRow,marginBottom:6}}>
+        {[["resumen","Resumen"],["inversiones","Invertido"],["abonos","Abonos"],["parrot","Venta Parrot"]].map(([k,l])=>
+          <Chip key={k} active={tab===k} color={GRIS_DARK} onClick={()=>{setTab(k);setErr(null);}}>{l}</Chip>)}
+      </div>
+      {err&&<div style={S.errorBanner}>{err}</div>}
+      {ok&&<div style={{...S.infoBox,marginTop:8}}>✓ {ok}</div>}
+
+      {tab==="resumen"&&<>
+        <div style={{...S.heroCard,marginTop:14}}>
+          <div style={{fontSize:12,opacity:0.8,fontWeight:700,textTransform:"uppercase",letterSpacing:0.6}}>Recuperación preferente · 50%</div>
+          <div style={{fontSize:32,fontWeight:900,marginTop:6}}>{fmtMXN(T.recuperado)}</div>
+          <div style={{fontSize:13,opacity:0.85}}>de {fmtMXN(T.meta)} · {pctT.toFixed(1)}%</div>
+          <div style={{height:10,borderRadius:99,background:"rgba(255,255,255,0.25)",overflow:"hidden",marginTop:12}}>
+            <div style={{width:`${pctT}%`,height:"100%",background:BLANCO}}/>
+          </div>
+          <div style={{display:"flex",gap:18,marginTop:14,fontSize:12}}>
+            <div><div style={{opacity:0.7}}>Invertido</div><div style={{fontWeight:800,fontSize:14}}>{fmtMXN(T.invertido)}</div></div>
+            <div><div style={{opacity:0.7}}>Dividendos pagados</div><div style={{fontWeight:800,fontSize:14}}>{fmtMXN(T.dividendos)}</div></div>
+          </div>
+        </div>
+        <ST>Por tienda</ST>
+        {filas.length===0&&<Empty>Sin tiendas de Groventia Group</Empty>}
+        {filas.map(f=>(
+          <div key={f.s.id} style={{...S.card,marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+              <div style={{fontWeight:900,fontSize:15}}>{f.s.emoji} {f.s.nombre}</div>
+              <div style={{fontWeight:900,color:ROSA}}>{f.pct.toFixed(0)}%</div>
+            </div>
+            <Barra pct={f.pct}/>
+            <div style={{fontSize:12,color:GRIS_MED,marginTop:8,lineHeight:1.6}}>
+              Invertido {fmtMXN(f.invertido)} · Recuperado {fmtMXN(f.recuperado)} de {fmtMXN(f.meta)}
+              {f.dividendos>0&&<> · Dividendos {fmtMXN(f.dividendos)}</>}
+            </div>
+          </div>
+        ))}
+        <ST>Venta mensual (Parrot)</ST>
+        {vm.filter(v=>sucG2.some(s=>s.id===v.sucursal_id)).length===0&&<Empty>Aún no se ha subido ningún mes</Empty>}
+        {vm.filter(v=>sucG2.some(s=>s.id===v.sucursal_id)).map(v=>(
+          <div key={v.id} style={{...S.card,display:"flex",justifyContent:"space-between",marginBottom:8}}>
+            <div><div style={{fontWeight:800,fontSize:14}}>{monthLabel(v.mes)}</div><div style={{fontSize:12,color:GRIS_TEXT}}>{sucName(v.sucursal_id)}</div></div>
+            <div style={{textAlign:"right"}}><div style={{fontWeight:900}}>{fmtMXN(num(v.venta_total))}</div><div style={{fontSize:11,color:GRIS_TEXT}}>bruta {fmtMXN(num(v.venta_bruta))}</div></div>
+          </div>
+        ))}
+      </>}
+
+      {tab==="inversiones"&&<>
+        <FL>Tienda</FL><SucPicker value={fi.sucursal_id} onChange={id=>setFi({...fi,sucursal_id:id})}/>
+        <FL>Concepto</FL>
+        <div style={S.chipRow}>{CONCEPTOS_INV.map(c=><Chip key={c.id} active={fi.concepto===c.id} color={ROSA} onClick={()=>setFi({...fi,concepto:c.id})}>{c.label}</Chip>)}</div>
+        <FL>Monto</FL><input type="number" inputMode="decimal" style={S.input} value={fi.monto} onChange={e=>setFi({...fi,monto:e.target.value})} placeholder="$0"/>
+        <FL>Fecha</FL><input type="date" style={S.input} value={fi.fecha} onChange={e=>setFi({...fi,fecha:e.target.value})}/>
+        <FL>Inversionista</FL><input list="lf-inversionistas" style={S.input} value={fi.inversionista} onChange={e=>setFi({...fi,inversionista:e.target.value})} placeholder="Nombre o sociedad"/>
+        <label style={{display:"flex",alignItems:"center",gap:10,marginTop:16,fontSize:14,color:GRIS_MED}}>
+          <input type="checkbox" checked={fi.recuperable} onChange={e=>setFi({...fi,recuperable:e.target.checked})} style={{width:20,height:20}}/>
+          Cuenta para la recuperación del 50%
+        </label>
+        <FL>Nota</FL><input style={S.input} value={fi.nota} onChange={e=>setFi({...fi,nota:e.target.value})} placeholder="Opcional"/>
+        <button onClick={guardarInv} style={{...S.btnPri,background:ROSA}}>Guardar inversión</button>
+        <ST>Registrado</ST>
+        {inv.length===0&&<Empty>Sin inversiones registradas</Empty>}
+        {inv.map(i=><Fila key={i.id} titulo={`${sucName(i.sucursal_id)} · ${CONCEPTOS_INV.find(c=>c.id===i.concepto)?.label||i.concepto}`}
+          sub={`${fmtFechaCorta(i.fecha)} ${i.fecha.slice(0,4)}${i.inversionista?` · ${i.inversionista}`:""}${i.recuperable?"":" · no recuperable"}`}
+          monto={num(i.monto)} onDelete={()=>borrar("inversiones",i.id)}/>)}
+      </>}
+
+      {tab==="abonos"&&<>
+        <FL>Tienda</FL><SucPicker value={fa.sucursal_id} onChange={id=>setFa({...fa,sucursal_id:id})}/>
+        <FL>Tipo</FL>
+        <div style={S.chipRow}>
+          <Chip active={fa.tipo==="recuperacion"} color={ROSA} onClick={()=>setFa({...fa,tipo:"recuperacion"})}>Recuperación del 50%</Chip>
+          <Chip active={fa.tipo==="dividendo"} color={ROSA} onClick={()=>setFa({...fa,tipo:"dividendo"})}>Dividendo</Chip>
+        </div>
+        <FL>Monto</FL><input type="number" inputMode="decimal" style={S.input} value={fa.monto} onChange={e=>setFa({...fa,monto:e.target.value})} placeholder="$0"/>
+        <div style={{display:"flex",gap:10}}>
+          <div style={{flex:1}}><FL>Fecha de pago</FL><input type="date" style={S.input} value={fa.fecha} onChange={e=>setFa({...fa,fecha:e.target.value})}/></div>
+          <div style={{flex:1}}><FL>Mes que paga</FL><input type="month" style={S.input} value={fa.mes} onChange={e=>setFa({...fa,mes:e.target.value})}/></div>
+        </div>
+        <FL>Inversionista</FL><input list="lf-inversionistas" style={S.input} value={fa.inversionista} onChange={e=>setFa({...fa,inversionista:e.target.value})} placeholder="Nombre o sociedad"/>
+        <FL>Referencia / rastreo SPEI</FL><input style={S.input} value={fa.referencia} onChange={e=>setFa({...fa,referencia:e.target.value})} placeholder="Opcional"/>
+        <FL>Nota</FL><input style={S.input} value={fa.nota} onChange={e=>setFa({...fa,nota:e.target.value})} placeholder="Opcional"/>
+        <button onClick={guardarAbo} style={{...S.btnPri,background:ROSA}}>Guardar abono</button>
+        <ST>Registrado</ST>
+        {abo.length===0&&<Empty>Sin abonos registrados</Empty>}
+        {abo.map(a=><Fila key={a.id} titulo={`${sucName(a.sucursal_id)} · ${a.tipo==="dividendo"?"Dividendo":"Recuperación"}`}
+          sub={`Pagado ${fmtFechaCorta(a.fecha)}${a.mes?` · mes ${monthLabel(a.mes)}`:""}${a.inversionista?` · ${a.inversionista}`:""}`}
+          monto={num(a.monto)} onDelete={()=>borrar("abonos_inversionistas",a.id)}/>)}
+      </>}
+
+      {tab==="parrot"&&<>
+        <div style={{...S.infoBox,marginTop:14,lineHeight:1.5}}>
+          Sube el <strong>Reporte de ventas</strong> de Parrot del mes completo (del 1 al último día), uno por tienda. Elige primero la tienda, porque el archivo no lo dice.
+        </div>
+        <FL>Mes</FL><input type="month" style={S.input} value={pMes} onChange={e=>setPMes(e.target.value)}/>
+        <FL>Tienda</FL><SucPicker value={pSuc} onChange={setPSuc}/>
+        <FL>Archivo de Parrot (.xlsx)</FL>
+        <input ref={pRef} type="file" accept=".xlsx,.xls" onChange={e=>leerArchivo(e.target.files?.[0])} style={{...S.input,padding:10}}/>
+        {pDatos&&(
+          <div style={{...S.card,marginTop:14,lineHeight:1.8,fontSize:14}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:GRIS_TEXT}}>Venta bruta</span><strong>{fmtMXN(pDatos.venta_bruta)}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:GRIS_TEXT}}>Descuentos</span><strong>{fmtMXN(pDatos.descuentos)}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:GRIS_TEXT}}>Venta total</span><strong>{fmtMXN(pDatos.venta_total)}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:GRIS_TEXT}}>Venta neta sin IVA</span><strong>{fmtMXN(pDatos.venta_neta)}</strong></div>
+            <div style={{borderTop:"1px solid #F0F0F0",marginTop:8,paddingTop:8,fontSize:12,color:GRIS_MED}}>
+              Efectivo capturado en el app este mes: <strong>{fmtMXN(efectivoMes)}</strong>
+              {pDatos.venta_total>0&&<> ({(efectivoMes/pDatos.venta_total*100).toFixed(0)}% de la venta total)</>}
+            </div>
+          </div>
+        )}
+        {yaExiste&&<div style={{...S.alertaBanner,marginTop:10}}>Ya hay venta guardada de este mes y tienda ({fmtMXN(num(yaExiste.venta_total))}). Si guardas, se reemplaza.</div>}
+        <button onClick={guardarParrot} disabled={!pDatos} style={{...S.btnPri,background:pDatos?ROSA:"#DDD",cursor:pDatos?"pointer":"default"}}>Guardar venta del mes</button>
+        <ST>Meses guardados</ST>
+        {vm.length===0&&<Empty>Aún no se ha subido ningún mes</Empty>}
+        {vm.map(v=><Fila key={v.id} titulo={`${monthLabel(v.mes)} · ${sucName(v.sucursal_id)}`}
+          sub={`Bruta ${fmtMXN(num(v.venta_bruta))} · desc. ${fmtMXN(num(v.descuentos))}${v.archivo?` · ${v.archivo}`:""}`}
+          monto={num(v.venta_total)} onDelete={()=>borrar("ventas_mensuales",v.id)}/>)}
+      </>}
+
+      <datalist id="lf-inversionistas">{inversionistas.map(n=><option key={n} value={n}/>)}</datalist>
     </Screen>
   );
 }
