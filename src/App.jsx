@@ -562,7 +562,7 @@ export default function App(){
   // ── MERMA ─────────────────────────────────────────────────────────────────
   // Última compra de fresa (de esa sucursal si hay; si no, la más reciente de cualquiera)
   const ultimaFresa=(sucId)=>{
-    const f=gastos.filter(g=>num(g.kg)>0&&num(g.monto)>0).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+    const f=gastosRaw.filter(g=>num(g.kg)>0&&num(g.monto)>0).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     return f.find(g=>g.sucursal_id===sucId)||f[0]||null;
   };
   const infoFresa=(sucId)=>{
@@ -616,7 +616,7 @@ export default function App(){
     if(!rForm.selDias.length){setError("Selecciona al menos un día para recolectar");setTimeout(()=>setError(null),3000);return;}
     if(!quienFinal){setError("Indica quién recolecta");setTimeout(()=>setError(null),3000);return;}
     // Los montos vienen de las ventas de ESA sucursal en esas fechas
-    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventas.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+efectivoEsperado(v);},0);
+    const montoTotal=rForm.selDias.reduce((s,f)=>{const v=ventasRaw.find(v=>v.fecha===f&&v.sucursal_id===rForm.sucursal_id);return s+efectivoEsperado(v);},0);
     const montoFisico=rForm.monto_fisico?parseFloat(rForm.monto_fisico):null;
     const faltante=montoFisico!=null?Math.max(0,montoTotal-montoFisico):0;
     const requiereAprobacion=quienFinal==="Apolo";
@@ -680,7 +680,11 @@ export default function App(){
   const sucName=(id)=>sucursales.find(s=>s.id===id)?.nombre||"—";
   const sucEmoji=(id)=>sucursales.find(s=>s.id===id)?.emoji||"📍";
   const sucColor=(id)=>sucursales.find(s=>s.id===id)?.color||GRIS_MED;
-  const sucActivasObj=sucursales.filter(s=>s.activa!==false);
+  // Para CAPTURAR se muestran todas las sucursales activas (de las dos empresas):
+  // cada registro se va solo a la empresa de su sucursal. El filtro por empresa
+  // aplica únicamente a resultados, resúmenes y Excel.
+  const sucActivasObj=sucursalesRaw.filter(s=>s.activa!==false)
+    .sort((a,b)=>(empresaDe(a)===empresaDe(b)?(a.orden||0)-(b.orden||0):empresaDe(a)==="G1"?-1:1));
   const sucActivas=sucActivasObj;
   // Helper: cuando viendo "Todas", devolver label para mostrar; si filtrando, devolver null
   const mkSucLabel=(sucId)=>{
@@ -1219,7 +1223,7 @@ export default function App(){
     const iF=infoFresa(mForm.sucursal_id);
     const valor=cu!=null&&num(mForm.cantidad)>0?cu*num(mForm.cantidad):null;
     const kgPrev=kgMerma(mForm);
-    const delDia=mermas.filter(m=>m.fecha===mForm.fecha&&m.sucursal_id===mForm.sucursal_id);
+    const delDia=mermasRaw.filter(m=>m.fecha===mForm.fecha&&m.sucursal_id===mForm.sucursal_id);
     const insNombre=mForm.insumo==="Otro"?(mForm.insumo_otro||"").trim():mForm.insumo;
     const listo=mForm.sucursal_id&&insNombre&&num(mForm.cantidad)>0;
     return(
@@ -1334,7 +1338,7 @@ export default function App(){
         <Chip active={vForm.fecha===todayISO()} color={VERDE} onClick={()=>setVForm(f=>({...f,fecha:todayISO()}))}>Hoy</Chip>
       </div>
       <input type="date" style={S.input} value={vForm.fecha} onChange={e=>setVForm(f=>({...f,fecha:e.target.value}))}/>
-      {vForm.sucursal_id&&ventas.find(v=>v.fecha===vForm.fecha&&v.sucursal_id===vForm.sucursal_id)&&(
+      {vForm.sucursal_id&&ventasRaw.find(v=>v.fecha===vForm.fecha&&v.sucursal_id===vForm.sucursal_id)&&(
         <div style={{...S.alertaBanner,background:AZUL_BG,color:AZUL,border:`1px solid ${AZUL}`,marginBottom:4}}>⚠️ Ya existe venta de {sucName(vForm.sucursal_id)} el {vForm.fecha} — se sobreescribirá</div>
       )}
       <FL>💵 Efectivo que entró ($) *</FL>
@@ -1390,7 +1394,7 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="recoleccion")return(
     <RecoleccionView
-      rForm={rForm} setRForm={setRForm} ventas={ventas} recolecciones={recolecciones}
+      rForm={rForm} setRForm={setRForm} ventas={ventasRaw} recolecciones={recoleccionesRaw}
       recoleccionesF={recoleccionesF} sucursales={sucursales} sucActivas={sucActivas}
       sucursalActiva={sucursalActiva} setView={setView} setSelRec={setSelRec}
       setSelVentaDia={setSelVentaDia} fetchV={fetchV}
@@ -2681,6 +2685,7 @@ function SucursalChips({sucursales,value,onChange}){
               transition:"all 0.15s"}}>
             <span style={{fontSize:16}}>{s.emoji||"📍"}</span>
             <span>{s.nombre}</span>
+            {empresaDe(s)==="G2"&&<span style={{fontSize:10,fontWeight:700,opacity:0.8}}>· Groventia Group</span>}
           </button>
         );
       })}
