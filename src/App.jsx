@@ -1465,12 +1465,12 @@ export default function App(){
           !r.aprobada
             ?<div style={{background:"#FFF8E1",borderRadius:14,padding:"14px 16px",marginBottom:12,border:"2px solid #FFD700"}}>
                <div style={{fontSize:13,fontWeight:800,color:"#E65100",marginBottom:4}}>⏳ Pendiente de aprobación</div>
-               <div style={{fontSize:12,color:"#795548",marginBottom:usuarioActual==="José Luis"?10:0}}>
-                 Esta recolección de <strong>Apolo</strong> requiere que <strong>José Luis</strong> la apruebe.
+               <div style={{fontSize:12,color:"#795548",marginBottom:PUEDE_VER_NUMEROS.includes(usuarioActual)?10:0}}>
+                 Esta recolección de <strong>Apolo</strong> requiere que <strong>José Luis o Andrés</strong> la aprueben.
                </div>
-               {usuarioActual==="José Luis"&&(
+               {PUEDE_VER_NUMEROS.includes(usuarioActual)&&(
                  <button onClick={async()=>{
-                   await sb.from("recolecciones").update({aprobada:true,aprobada_por:"José Luis",nota:(r.nota||"")+(r.nota?"\n":"")+"✅ Aprobada por José Luis el "+todayISO()}).eq("id",r.id);
+                   await sb.from("recolecciones").update({aprobada:true,aprobada_por:usuarioActual,nota:(r.nota||"")+(r.nota?"\n":"")+"✅ Aprobada por "+usuarioActual+" el "+todayISO()}).eq("id",r.id);
                    await fetchR();
                    const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});
                    if(data){setRecolecciones(data);const upd=data.find(x=>x.id===r.id);if(upd)setSelRec(upd);}
@@ -2590,7 +2590,7 @@ export default function App(){
               ⏳ {creditosPendientes.length}
             </button>
           )}
-          {usuarioActual==="José Luis"&&recoleccionesPendientesAprobacion.length>0&&(
+          {PUEDE_VER_NUMEROS.includes(usuarioActual)&&recoleccionesPendientesAprobacion.length>0&&(
             <button onClick={()=>setView("recoleccion")}
               style={{background:"#FFF8E1",border:"2px solid #FFD700",borderRadius:10,padding:"5px 10px",fontSize:12,fontWeight:700,color:"#E65100",cursor:"pointer",animation:"pulse 1.5s infinite"}}>
               🔔 {recoleccionesPendientesAprobacion.length} por aprobar
