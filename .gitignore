@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# El lockfile local no se sube para no cambiar cómo Vercel instala las dependencias
+package-lock.json
