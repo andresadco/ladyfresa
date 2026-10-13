@@ -32,7 +32,8 @@ const EQUIPO=["Hugo","Sofía","Nueva","José Luis","Jefeson","Andres","Apolo"];
 const PUEDE_VER_NUMEROS=["José Luis","Andres"]; // Solo ellos ven resúmenes y cifras
 const PUEDE_ADMIN_SUC=["Andres","José Luis"]; // Pueden crear/editar/desactivar sucursales
 const PUEDE_ADMIN_CAT=["Andres","José Luis"]; // Pueden crear/editar/desactivar categorías
-const PINES={"José Luis":"5555","Andres":"1221"}; // PINs de acceso
+// Los PINs viven en la base (cifrados) y se validan en el servidor: función lfg-login.
+const LOGIN_URL=SUPABASE_URL+"/functions/v1/lfg-login";
 // Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
 const APOLO_REQUIERE_APROBACION=true;
 const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Tarjeta Amex","Otro"];
@@ -248,7 +249,43 @@ export default function App(){
       setSucursalActiva(null);
   },[sucursalesRaw,empresaActiva,sucursalActiva]);
   const[loading,setLoading]=useState(true);
-  const[usuarioActual,setUsuarioActual]=useState(()=>localStorage.getItem("lf_usuario")||null);
+  const[usuarioActual,setUsuarioActual]=useState(null);
+  const[sesionOk,setSesionOk]=useState(null); // null = revisando · false = sin sesión · true = con sesión
+  const[equipoLogin,setEquipoLogin]=useState(EQUIPO.filter(n=>n!=="Nueva"));
+  const[pinMsg,setPinMsg]=useState("");
+  const[pinBusy,setPinBusy]=useState(false);
+  // Sesión: sin PIN válido no se ve nada (la base ya no deja leer sin sesión)
+  useEffect(()=>{
+    sb.rpc("lfg_equipo").then(({data})=>{if(Array.isArray(data)&&data.length)setEquipoLogin(data.map(r=>r.nombre));});
+    sb.auth.getSession().then(({data})=>{
+      const u=data?.session?.user;
+      if(u&&u.app_metadata?.lfg_id){setUsuarioActual(u.user_metadata?.name||localStorage.getItem("lf_usuario"));setSesionOk(true);}
+      else{localStorage.removeItem("lf_usuario");setSesionOk(false);}
+    });
+    const{data:sub}=sb.auth.onAuthStateChange((ev)=>{
+      if(ev==="SIGNED_OUT"){localStorage.removeItem("lf_usuario");setUsuarioActual(null);setSesionOk(false);}
+    });
+    return()=>sub?.subscription?.unsubscribe();
+  },[]);
+  const entrarConPin=async(nombre,pin)=>{
+    setPinBusy(true);setPinMsg("");
+    try{
+      const r=await fetch(LOGIN_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nombre,pin})});
+      const j=await r.json().catch(()=>({ok:false}));
+      if(j.ok&&j.session){
+        await sb.auth.setSession(j.session);
+        localStorage.setItem("lf_usuario",j.user.nombre);
+        setUsuarioActual(j.user.nombre);setSesionOk(true);
+        setPinUsuario(null);setPinInput("");
+      }else{
+        setPinError(true);
+        setPinMsg(j.error==="bloqueado"?"Demasiados intentos. Espera 15 minutos.":"❌ PIN incorrecto, intenta de nuevo");
+        setTimeout(()=>setPinInput(""),600);
+      }
+    }catch(e){setPinError(true);setPinMsg("Sin conexión. Intenta de nuevo.");setTimeout(()=>setPinInput(""),600);}
+    setPinBusy(false);
+  };
+  const salir=async()=>{localStorage.removeItem("lf_usuario");await sb.auth.signOut().catch(()=>{});setUsuarioActual(null);setSesionOk(false);};
   const[selMonth,setSelMonth]=useState(null);
   const[selRec,setSelRec]=useState(null);
   const[selVentaDia,setSelVentaDia]=useState(null);
@@ -364,6 +401,8 @@ export default function App(){
   },[fForm.forma,fForm.fecha,tarjetas]);
 
   useEffect(()=>{
+    if(sesionOk===null)return;
+    if(!sesionOk){setLoading(false);return;}
     (async()=>{setLoading(true);await Promise.all([fetchG(),fetchV(),fetchR(),fetchS(),fetchC(),fetchT(),fetchM()]);setLoading(false);})();
     const uid=Math.random().toString(36).slice(2);
     const chG=sb.channel("g-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"gastos"},fetchG).subscribe();
@@ -373,7 +412,7 @@ export default function App(){
     const chM=sb.channel("m-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"mermas"},fetchM).subscribe();
     const chC=sb.channel("c-"+uid).on("postgres_changes",{event:"*",schema:"public",table:"categorias"},fetchC).subscribe();
     return()=>{sb.removeChannel(chG);sb.removeChannel(chV);sb.removeChannel(chR);sb.removeChannel(chS);sb.removeChannel(chC);sb.removeChannel(chM);};
-  },[]);
+  },[sesionOk]);
 
   // ── FOTO UPLOAD ───────────────────────────────────────────────────────────
   const handleFoto=async(e)=>{
@@ -740,18 +779,15 @@ export default function App(){
       <div style={{fontSize:26,fontWeight:900,color:BLANCO,marginBottom:4}}>Lady Fresa</div>
       <div style={{fontSize:14,color:"rgba(255,255,255,0.7)",marginBottom:36}}>¿Quién eres?</div>
       <div style={{width:"100%",maxWidth:320,display:"flex",flexDirection:"column",gap:12}}>
-        {EQUIPO.map(nombre=>(
-          <button key={nombre} onClick={()=>{
-              if(PINES[nombre]){setPinUsuario(nombre);setPinInput("");setPinError(false);}
-              else{localStorage.setItem("lf_usuario",nombre);setUsuarioActual(nombre);}
-            }}
+        {equipoLogin.map(nombre=>(
+          <button key={nombre} onClick={()=>{setPinUsuario(nombre);setPinInput("");setPinError(false);setPinMsg("");}}
             style={{width:"100%",padding:"16px 0",borderRadius:16,
-              border:nombre==="Apolo"?"2px solid #FFD700":PINES[nombre]?"2px solid rgba(255,255,255,0.6)":"2px solid rgba(255,255,255,0.3)",
-              background:nombre==="Apolo"?"rgba(255,215,0,0.2)":PINES[nombre]?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.15)",
+              border:nombre==="Apolo"?"2px solid #FFD700":"2px solid rgba(255,255,255,0.6)",
+              background:nombre==="Apolo"?"rgba(255,215,0,0.2)":"rgba(255,255,255,0.25)",
               color:BLANCO,fontSize:17,fontWeight:800,
               cursor:"pointer",fontFamily:"inherit",backdropFilter:"blur(8px)",
               letterSpacing:0.3}}>
-            {nombre==="Apolo"?"🧑 ":PINES[nombre]?"🔒 ":""}{nombre}{nombre==="Apolo"?" (Recolector)":""}
+            {nombre==="Apolo"?"🧑 ":"🔒 "}{nombre}{nombre==="Apolo"?" (Recolector)":""}
           </button>
         ))}
       </div>
@@ -771,25 +807,17 @@ export default function App(){
                   transition:"background 0.15s"}}/>
               ))}
             </div>
-            {pinError&&<div style={{fontSize:12,color:"#E53935",fontWeight:700,marginBottom:12}}>❌ PIN incorrecto, intenta de nuevo</div>}
+            {pinError&&<div style={{fontSize:12,color:"#E53935",fontWeight:700,marginBottom:12}}>{pinMsg||"❌ PIN incorrecto, intenta de nuevo"}</div>}
+            {pinBusy&&<div style={{fontSize:12,color:GRIS_TEXT,marginBottom:12}}>Revisando…</div>}
             {/* Teclado numérico */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}}>
               {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,i)=>(
-                <button key={i} disabled={k===""} onClick={()=>{
+                <button key={i} disabled={k===""||pinBusy} onClick={()=>{
                   if(k==="⌫"){setPinInput(p=>p.slice(0,-1));setPinError(false);}
-                  else{
+                  else if(pinInput.length<4){
                     const nuevo=pinInput+k;
-                    setPinInput(nuevo);
-                    if(nuevo.length===4){
-                      if(nuevo===PINES[pinUsuario]){
-                        localStorage.setItem("lf_usuario",pinUsuario);
-                        setUsuarioActual(pinUsuario);
-                        setPinUsuario(null);setPinInput("");
-                      } else {
-                        setPinError(true);
-                        setTimeout(()=>setPinInput(""),600);
-                      }
-                    }
+                    setPinInput(nuevo);setPinError(false);
+                    if(nuevo.length===4)entrarConPin(pinUsuario,nuevo);
                   }
                 }}
                   style={{padding:"18px 0",borderRadius:14,border:"1.5px solid #E8E8E8",
@@ -2568,7 +2596,7 @@ export default function App(){
               🔔 {recoleccionesPendientesAprobacion.length} por aprobar
             </button>
           )}
-          <button onClick={()=>{localStorage.removeItem("lf_usuario");setUsuarioActual(null);}}
+          <button onClick={salir}
             style={{background:ROSA_BG,border:`1.5px solid ${ROSA}`,borderRadius:10,padding:"5px 10px",
               fontSize:11,fontWeight:800,color:ROSA,cursor:"pointer"}}>
             👤 {usuarioActual}
