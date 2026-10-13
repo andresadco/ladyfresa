@@ -36,7 +36,7 @@ const PUEDE_ADMIN_CAT=["Andres","José Luis"]; // Pueden crear/editar/desactivar
 const LOGIN_URL=SUPABASE_URL+"/functions/v1/lfg-login";
 // Apolo: puede registrar gastos y recolecciones, pero las recolecciones requieren aprobación de José Luis
 const APOLO_REQUIERE_APROBACION=true;
-const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Tarjeta Santander","Tarjeta Amex","Otro"];
+const FORMA_OPTS=["Efectivo","Mercado Pago","Transfer BBVA","Transfer Santander","Tarjeta Santander","Tarjeta Amex","Otro"];
 
 // ── TARJETAS CON CRÉDITO AUTOMÁTICO ──────────────────────────────────────────
 // En México el crédito de una tarjeta NO son "X días desde la compra":
