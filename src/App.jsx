@@ -350,7 +350,7 @@ export default function App(){
   };
 
   // ── SUPABASE ─────────────────────────────────────────────────────────────
-  const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});if(data)setGastos(data);};
+  const fetchG=async()=>{const{data}=await sb.from("gastos").select("*").is("borrado_at",null).order("fecha",{ascending:false});if(data)setGastos(data);};
   const fetchV=async()=>{const{data}=await sb.from("ventas").select("*").order("fecha",{ascending:false});if(data)setVentas(data);};
   const fetchR=async()=>{const{data}=await sb.from("recolecciones").select("*").order("created_at",{ascending:false});if(data)setRecolecciones(data);};
   const fetchM=async()=>{const{data}=await sb.from("mermas").select("*").order("fecha",{ascending:false});if(data)setMermas(data);};
@@ -553,12 +553,21 @@ export default function App(){
 
   const deleteGasto=async(id)=>{
     const g=gastos.find(x=>x.id===id);
-    if(usuarioActual==="Apolo")return;
+    if(usuarioActual==="Apolo")return false;
     const esAdmin=usuarioActual==="Andres"||usuarioActual==="José Luis";
-    if(!esAdmin&&g?.quien!==usuarioActual)return;
-    await sb.from("gastos").delete().eq("id",id);
-    const{data}=await sb.from("gastos").select("*").order("fecha",{ascending:false});
-    if(data)setGastos(data);
+    if(!esAdmin&&g?.quien!==usuarioActual){avisoFlotante("Solo puedes borrar tus propios gastos");return false;}
+    const{error:e}=await sb.from("gastos").update({borrado_at:new Date().toISOString(),borrado_por:usuarioActual}).eq("id",id);
+    if(e){avisoFlotante("No se pudo borrar: "+e.message);return false;}
+    await fetchG();
+    avisoFlotante("🗑 Gasto borrado"+(g?" · "+g.concepto+" "+fmtMXN(g.monto):""),"Deshacer",async()=>{
+      await sb.from("gastos").update({borrado_at:null,borrado_por:null}).eq("id",id);
+      await fetchG();avisoFlotante("↩︎ Recuperado");
+    });
+    return true;
+  };
+  const recuperarGasto=async(id)=>{
+    await sb.from("gastos").update({borrado_at:null,borrado_por:null}).eq("id",id);
+    await fetchG();avisoFlotante("↩︎ Recuperado");
   };
 
   const marcarPagado=async()=>{
@@ -844,6 +853,9 @@ export default function App(){
   // ══════════════════════════════════════════════════════════════════════════
   // VISTA: NUEVO / EDITAR GASTO
   // ══════════════════════════════════════════════════════════════════════════
+  if(view==="papelera")return(
+    <Papelera sb={sb} onBack={()=>setView("inicio")} onRecuperar={recuperarGasto} mkSucLabel={mkSucLabel} cats={cats}/>
+  );
   if(view==="nuevo")return(
     <Screen title={editandoId?"Editar Gasto":"Nuevo Gasto"}
       onBack={()=>{setEditandoId(null);setForm(FORM0);setView("inicio");}}>
@@ -1007,6 +1019,7 @@ export default function App(){
         style={{...S.btnPri,opacity:(!form.monto||!form.concepto||!form.sucursal_id)?0.4:1,background:saved?VERDE:ROSA}}>
         {saved?"✅ ¡Guardado!":!form.sucursal_id?"Selecciona una sucursal":editandoId?"💾 Guardar cambios":"Guardar Gasto"}
       </button>
+      {editandoId&&<BorrarEnEditar onBorrar={async()=>{const ok=await deleteGasto(editandoId);if(ok!==false){setEditandoId(null);setForm(FORM0);setView("inicio");}}}/>}
     </Screen>
   );
 
@@ -2680,6 +2693,7 @@ export default function App(){
           {todayG.slice(0,4).map(g=><GastoRow key={g.id} g={g} onDelete={deleteGasto} onEdit={startEdit} inusual={esInusual(g.cat,g.monto)} canEdit={usuarioActual==="Andres"||usuarioActual==="José Luis"||(usuarioActual!=="Apolo"&&g.quien===usuarioActual)} canSeeNumbers={PUEDE_VER_NUMEROS.includes(usuarioActual)} sucursalLabel={mkSucLabel(g.sucursal_id)} cats={cats}/>)}
         </div>
       )}
+      {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<div style={{padding:"0 16px"}}><button onClick={()=>setView("papelera")} style={{background:"none",border:"none",color:GRIS_TEXT,fontSize:12,fontWeight:700,cursor:"pointer",padding:"6px 0 90px",fontFamily:"inherit"}}>🗑 Papelera (gastos borrados)</button></div>}
 
       <nav style={S.bottomNav}>
         {PUEDE_VER_NUMEROS.includes(usuarioActual)&&<NavBtn icon="📊" label="Resumen" onClick={()=>setView("resumen")}/>}
@@ -3932,6 +3946,55 @@ function GastoRow({g,onDelete,onEdit,inusual,canEdit,canSeeNumbers=true,sucursal
         </div>
       </div>
     </div>
+  );
+}
+
+// Aviso flotante con botón opcional (p. ej. "Deshacer"). Funciona en cualquier pantalla.
+function avisoFlotante(texto,accion,fn){
+  const viejo=document.getElementById("lf-aviso");if(viejo)viejo.remove();
+  const d=document.createElement("div");d.id="lf-aviso";
+  d.style.cssText="position:fixed;left:16px;right:16px;bottom:90px;max-width:480px;margin:0 auto;background:#1A1A1A;color:#fff;border-radius:14px;padding:13px 16px;font:600 14px system-ui,sans-serif;display:flex;align-items:center;gap:12px;z-index:9999;box-shadow:0 10px 30px rgba(0,0,0,.35)";
+  const t=document.createElement("span");t.textContent=texto;t.style.flex="1";d.appendChild(t);
+  if(accion&&fn){const b=document.createElement("button");b.textContent=accion;b.style.cssText="background:#E8175D;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-weight:800;font-size:13px;cursor:pointer";
+    b.onclick=()=>{d.remove();fn();};d.appendChild(b);}
+  document.body.appendChild(d);setTimeout(()=>{if(d.parentNode)d.remove();},accion?7000:3000);
+}
+
+function BorrarEnEditar({onBorrar}){
+  const[seguro,setSeguro]=useState(false);
+  return seguro
+    ?<div style={{display:"flex",gap:10,marginTop:12}}>
+        <button onClick={()=>setSeguro(false)} style={{...S.btnSec,flex:1,marginTop:0}}>Cancelar</button>
+        <button onClick={onBorrar} style={{...S.btnPri,flex:1,marginTop:0,background:"#E53935"}}>🗑 Sí, borrar</button>
+      </div>
+    :<button onClick={()=>setSeguro(true)} style={{width:"100%",marginTop:12,padding:"14px 0",borderRadius:14,border:"1.5px solid #EF9A9A",background:"#fff",color:"#E53935",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit"}}>🗑 Borrar este gasto</button>;
+}
+
+// Papelera: gastos borrados de los últimos 60 días, con quién lo borró, y botón para recuperarlos
+function Papelera({sb,onBack,onRecuperar,mkSucLabel,cats}){
+  const[lista,setLista]=useState(null);
+  const cargar=async()=>{
+    const desde=new Date(Date.now()-60*864e5).toISOString();
+    const{data}=await sb.from("gastos").select("*").not("borrado_at","is",null).gte("borrado_at",desde).order("borrado_at",{ascending:false});
+    setLista(data||[]);
+  };
+  useEffect(()=>{cargar();},[]);
+  return(
+    <Screen title="🗑 Papelera" onBack={onBack}>
+      <div style={{fontSize:13,color:GRIS_TEXT,margin:"4px 0 14px",lineHeight:1.5}}>Lo que se borra queda aquí 60 días. No cuenta en totales ni en pagos. Si se borró por error, dale <b>Recuperar</b>.</div>
+      {lista===null&&<Empty>Cargando…</Empty>}
+      {lista&&lista.length===0&&<Empty>No hay nada borrado</Empty>}
+      {(lista||[]).map(g=>{const cat=cats.find(c=>c.id===g.cat)||CATS_DEFAULT[10];const su=mkSucLabel?mkSucLabel(g.sucursal_id):null;
+        return<div key={g.id} style={{...S.card,marginBottom:8,display:"flex",gap:10,alignItems:"center",opacity:.92}}>
+          <div style={{fontSize:22}}>{cat.emoji}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:14}}>{g.concepto} <span style={{fontWeight:900,color:cat.color}}>{fmtMXN(g.monto)}</span></div>
+            <div style={{fontSize:11,color:GRIS_TEXT}}>{g.fecha}{su?" · "+su.nombre:""}{g.quien?" · "+g.quien:""}</div>
+            <div style={{fontSize:11,color:"#E53935"}}>Borrado por {g.borrado_por||"—"} · {String(g.borrado_at).slice(0,16).replace("T"," ")}</div>
+          </div>
+          <button onClick={async()=>{await onRecuperar(g.id);cargar();}} style={{background:VERDE_BG,color:VERDE,border:"1.5px solid #A5D6A7",borderRadius:10,padding:"8px 12px",fontWeight:800,fontSize:12,cursor:"pointer"}}>↩︎ Recuperar</button>
+        </div>;})}
+    </Screen>
   );
 }
 
