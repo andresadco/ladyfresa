@@ -325,6 +325,8 @@ export default function App(){
     catch{return SEMANAL_DEFAULT;}
   });
   const fileRef=useRef();
+  const guardandoRef=useRef(false); // evita guardar dos veces con doble toque
+  const unaVez=(fn)=>async(...a)=>{if(guardandoRef.current)return;guardandoRef.current=true;try{return await fn(...a);}finally{setTimeout(()=>{guardandoRef.current=false;},1500);}};
   const camaraRef=useRef();
 
   // ── TARJETAS (config de corte / días de pago) ─────────────────────────────
@@ -435,7 +437,7 @@ export default function App(){
   cats.forEach(c=>{const ms=gastos.filter(g=>g.cat===c.id).map(g=>g.monto);if(ms.length>1)promedios[c.id]=ms.reduce((s,m)=>s+m,0)/ms.length;});
   const esInusual=(cat,monto)=>promedios[cat]&&monto>promedios[cat]*2.5;
 
-  const saveGasto=async()=>{
+  const saveGasto=unaVez(async()=>{
     if(!form.cat){setCatErr(true);setTimeout(()=>setCatErr(false),2000);return;}
     if(!form.monto||!form.concepto)return;
     if(!form.sucursal_id){setError("Selecciona una sucursal");setTimeout(()=>setError(null),3000);return;}
@@ -463,7 +465,7 @@ export default function App(){
     await fetchG();
     setSaved(true);
     setTimeout(()=>{setSaved(false);setEditandoId(null);setForm(FORM0);setView("inicio");},1200);
-  };
+  });
 
   // ── COMPRA DE FRESA ───────────────────────────────────────────────────────
   const KG_CAJA={"6":6,"4":4};
@@ -489,7 +491,7 @@ export default function App(){
   };
   const proveedoresFresa=[...new Set(gastos.filter(g=>g.cat==="fruta").map(g=>g.concepto))].filter(Boolean).slice(0,4);
 
-  const saveFresa=async()=>{
+  const saveFresa=unaVez(async()=>{
     if(cajasFresa===0){setError("Agrega al menos una caja");setTimeout(()=>setError(null),3000);return;}
     const sinPrecio=fForm.lineas.some(l=>cajasLinea(l)>0&&!l.cortesia&&num(l.precio)<=0);
     if(sinPrecio){setError("Falta el precio por caja");setTimeout(()=>setError(null),3000);return;}
@@ -527,7 +529,7 @@ export default function App(){
       };
     });
     let{error:e}=await sb.from("gastos").insert(rows);
-    if(e){ // Fallback: la migración de columnas nuevas todavía no se corre
+    if(e&&/column|schema cache/i.test(e.message||"")){ // Fallback: solo si faltan las columnas nuevas
       const base=rows.map(({cajas,kg,precio_caja,tipo_caja,grupo,...r})=>r);
       ({error:e}=await sb.from("gastos").insert(base));
     }
@@ -536,7 +538,7 @@ export default function App(){
     await fetchG();
     setFSaved(true);
     setTimeout(()=>{setFSaved(false);setFForm({...FRESA0,fecha:todayISO(),lineas:[nuevaLinea("6")]});setView("inicio");},1200);
-  };
+  });
 
   const startEdit=(g)=>{
     if(usuarioActual!=="Andres"&&g.quien!==usuarioActual)return;
