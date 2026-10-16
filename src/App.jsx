@@ -196,8 +196,22 @@ const FORM0={fecha:todayISO(),cat:"",monto:"",concepto:"",forma:"Efectivo",tipo_
 const VFORM0={fecha:yesterdayISO(),efectivo:"",salidas:"",salidas_nota:"",quien:"",nota:"",sucursal_id:null};
 const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fisico:"",quien_faltante:"",sucursal_id:null};
 // Compra de fresa: una o más "líneas" (tipo de caja + precio) y el reparto por sucursal
+// Proveedores de fresa conocidos y la caja que manejan (si siempre es la misma)
+const PROVEEDORES_FRESA=[
+  {nombre:"Fresa Méx",caja:null},            // Ricardo — cajas de 4 o 6 kg según precio
+  {nombre:"Susana Sanvicente",caja:"7"},     // Factura a Groventia — cajas de 7 kg, retiene ISR 1.25%
+];
+const TIPOS_CAJA=["4","6","7"];
+// Nombre del proveedor para el corte semanal ("Compra de fresa" sin proveedor = Fresa Méx, el de siempre)
+const provCorte=(concepto)=>{
+  const c=(concepto||"").trim();
+  if(!c||/^compra de fresa/i.test(c)||/fresa m/i.test(c))return"Fresa Méx";
+  const k=PROVEEDORES_FRESA.find(p=>p.nombre.toLowerCase().split(" ")[0]===c.toLowerCase().split(" ")[0]);
+  return k?k.nombre:c;
+};
+const esCompraFresa=(g)=>g.cat==="fruta"&&(num(g.cajas)>0||/^🍓/.test(g.nota||""));
 const nuevaLinea=(tipo="6")=>({tipo,precio:"",cajas:{},cortesia:false});
-const FRESA0={fecha:todayISO(),proveedor:"",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"semanal",dias_credito:"",quien:"",nota:"",foto:null};
+const FRESA0={fecha:todayISO(),proveedor:"Fresa Méx",lineas:[nuevaLinea("6")],forma:"Efectivo",tipo_pago:"semanal",dias_credito:"",quien:"",nota:"",foto:null};
 // Merma del día: lo que se tira en tienda (no es gasto nuevo, ya está en la compra)
 const INSUMOS_MERMA=["Fresa","Crema","Yogurt griego","Chocolate","Crumble","Toppings","Desechables","Otro"];
 const MOTIVOS_MERMA=["Golpeada / aplastada","Pasada / madura","Caducó","Se cayó / accidente","Error al preparar","Otro"];
@@ -314,6 +328,7 @@ export default function App(){
   const[catErr,setCatErr]=useState(false);
   const[uploadingFoto,setUploadingFoto]=useState(false);
   const[pagoForm,setPagoForm]=useState(null); // {id, forma, fecha, nota}
+  const[corteForm,setCorteForm]=useState(null); // {prov, ids, forma, fecha} — liquidar el corte semanal de un proveedor de fresa
   const[tarjetas,setTarjetas]=useState(()=>{
     try{const v=JSON.parse(localStorage.getItem("lf_tarjetas")||"null");return Array.isArray(v)&&v.length?v:TARJETAS_DEFAULT;}
     catch{return TARJETAS_DEFAULT;}
@@ -468,7 +483,7 @@ export default function App(){
   });
 
   // ── COMPRA DE FRESA ───────────────────────────────────────────────────────
-  const KG_CAJA={"6":6,"4":4};
+  const KG_CAJA={"6":6,"4":4,"7":7};
   const cajasLinea=(l)=>Object.values(l.cajas||{}).reduce((s,n)=>s+(parseInt(n)||0),0);
   const totalLinea=(l)=>l.cortesia?0:cajasLinea(l)*num(l.precio);
   const kgLinea=(l)=>cajasLinea(l)*(KG_CAJA[l.tipo]||0);
@@ -484,12 +499,20 @@ export default function App(){
     ix===i?{...l,cajas:{...l.cajas,[sid]:Math.max(0,n)}}:l)}));
   // Último precio pagado por tipo de caja (para sugerirlo de un toque)
   const ultimoPrecioCaja=(tipo)=>{
-    const g=gastos.find(x=>x.tipo_caja===tipo&&num(x.precio_caja)>0);
+    const prov=provCorte(fForm.proveedor);
+    const g=gastos.find(x=>x.tipo_caja===tipo&&num(x.precio_caja)>0&&provCorte(x.concepto)===prov)
+      ||gastos.find(x=>x.tipo_caja===tipo&&num(x.precio_caja)>0);
     if(g)return num(g.precio_caja);
     const ls=num(localStorage.getItem("lf_precio_caja_"+tipo));
     return ls>0?ls:null;
   };
-  const proveedoresFresa=[...new Set(gastos.filter(g=>g.cat==="fruta").map(g=>g.concepto))].filter(Boolean).slice(0,4);
+  // Proveedores para elegir de un toque: los conocidos + los que ya se han usado en compras con cajas
+  const proveedoresFresa=[...new Set([...PROVEEDORES_FRESA.map(p=>p.nombre),
+    ...gastos.filter(esCompraFresa).map(g=>provCorte(g.concepto))])].slice(0,5);
+  const elegirProveedor=(nombre)=>setFForm(f=>{
+    const caja=PROVEEDORES_FRESA.find(p=>p.nombre===nombre)?.caja;
+    return{...f,proveedor:nombre,lineas:caja?f.lineas.map(l=>({...l,tipo:caja})):f.lineas};
+  });
 
   const saveFresa=unaVez(async()=>{
     if(cajasFresa===0){setError("Agrega al menos una caja");setTimeout(()=>setError(null),3000);return;}
@@ -507,7 +530,7 @@ export default function App(){
       :tj?vencimientoTarjeta(fForm.fecha,tj)
       :dias?addDays(fForm.fecha,dias):null;
     const grupo="fresa-"+Date.now();
-    const concepto=fForm.proveedor?.trim()||"Compra de fresa";
+    const concepto=fForm.proveedor?.trim()||"Fresa Méx";
     // Un gasto por sucursal: así el costo queda repartido correcto en el P&L
     const rows=sucActivas.filter(s=>cajasFresaSuc(s.id)>0).map(s=>{
       const detalle=fForm.lineas.filter(l=>cajasSucLinea(l,s.id)>0).map(l=>
@@ -581,6 +604,21 @@ export default function App(){
     await fetchG();
     setPagoForm(null);
   };
+
+  // Liquidar el corte semanal de un proveedor de fresa: marca pagadas todas sus compras pendientes
+  // (no se captura gasto nuevo, para no duplicar)
+  const liquidarCorte=unaVez(async()=>{
+    if(!corteForm||!corteForm.ids.length)return;
+    const txt=`Pago: corte semanal ${fmtFechaCorta(corteForm.fecha)} · ${corteForm.forma}`;
+    for(const id of corteForm.ids){
+      const g=gastos.find(x=>x.id===id);
+      await sb.from("gastos").update({pagado:true,fecha_pago:corteForm.fecha,forma:corteForm.forma,
+        nota:(g?.nota||"")+"\n"+txt}).eq("id",id);
+    }
+    await fetchG();
+    avisoFlotante(`✅ Corte de ${corteForm.prov} liquidado`);
+    setCorteForm(null);
+  });
 
   // ── VENTAS ────────────────────────────────────────────────────────────────
   const saveVenta=async()=>{
@@ -1040,11 +1078,9 @@ export default function App(){
       <FL>Proveedor</FL>
       <input style={S.input} placeholder="Ej: Fresa MX, Central de Abastos…" value={fForm.proveedor}
         onChange={e=>setFForm(f=>({...f,proveedor:e.target.value}))}/>
-      {proveedoresFresa.length>0&&!fForm.proveedor&&(
-        <div style={{...S.chipRow,marginTop:8}}>
-          {proveedoresFresa.map(p=><Chip key={p} active={false} color={ROSA} onClick={()=>setFForm(f=>({...f,proveedor:p}))}>{p}</Chip>)}
-        </div>
-      )}
+      <div style={{...S.chipRow,marginTop:8}}>
+        {proveedoresFresa.map(p=><Chip key={p} active={fForm.proveedor===p} color={ROSA} onClick={()=>elegirProveedor(p)}>{p}</Chip>)}
+      </div>
 
       {fForm.lineas.map((l,i)=>{
         const ultimo=ultimoPrecioCaja(l.tipo);
@@ -1066,7 +1102,7 @@ export default function App(){
             </div>
 
             <div style={{display:"flex",gap:8}}>
-              {["6","4"].map(t=>(
+              {TIPOS_CAJA.map(t=>(
                 <button key={t} onClick={()=>setLinea(i,{tipo:t})}
                   style={{flex:1,padding:"12px 4px",borderRadius:13,cursor:"pointer",fontFamily:"inherit",
                     border:`2px solid ${l.tipo===t?ROSA:"#E0E0E0"}`,
@@ -1143,7 +1179,7 @@ export default function App(){
       })}
 
       {fForm.lineas.length<3&&(
-        <button onClick={()=>setFForm(f=>({...f,lineas:[...f.lineas,nuevaLinea(f.lineas[f.lineas.length-1]?.tipo==="6"?"4":"6")]}))}
+        <button onClick={()=>setFForm(f=>({...f,lineas:[...f.lineas,nuevaLinea(PROVEEDORES_FRESA.find(p=>p.nombre===f.proveedor)?.caja||(f.lineas[f.lineas.length-1]?.tipo==="6"?"4":"6"))]}))}
           style={{...S.btnSec,marginTop:12}}>
           ➕ Agregar otro tipo de caja
         </button>
@@ -1658,6 +1694,59 @@ export default function App(){
             </div>
           );
         })}
+
+        {/* Corte semanal de fresa, separado por proveedor */}
+        {(()=>{
+          const fresaPend=pendientes.filter(esCompraFresa);
+          if(fresaPend.length===0)return null;
+          const porProv={};
+          fresaPend.forEach(g=>{
+            const k=provCorte(g.concepto);
+            const p=porProv[k]||(porProv[k]={ids:[],cajas:0,kg:0,monto:0,cortesia:0,desde:g.fecha,hasta:g.fecha,vence:g.fecha_vencimiento,tipos:new Set()});
+            p.ids.push(g.id);p.cajas+=num(g.cajas);p.kg+=num(g.kg);p.monto+=num(g.monto);
+            if(num(g.monto)===0)p.cortesia+=num(g.cajas);
+            if(g.tipo_caja)p.tipos.add(g.tipo_caja+" kg");
+            if(g.fecha<p.desde)p.desde=g.fecha;if(g.fecha>p.hasta)p.hasta=g.fecha;
+            if(g.fecha_vencimiento&&(!p.vence||g.fecha_vencimiento<p.vence))p.vence=g.fecha_vencimiento;
+          });
+          return(
+            <div style={{background:BLANCO,borderRadius:14,padding:"12px 14px",marginBottom:12,
+              boxShadow:"0 2px 8px rgba(0,0,0,0.05)",borderLeft:`4px solid ${ROSA}`}}>
+              <div style={{fontSize:13,fontWeight:900,color:GRIS_DARK,marginBottom:4}}>🍓 Corte de fresa por proveedor</div>
+              {Object.entries(porProv).sort((a,b)=>b[1].monto-a[1].monto).map(([prov,p])=>(
+                <div key={prov} style={{borderTop:"1px solid #F0F0F0",paddingTop:8,marginTop:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                    <span style={{fontSize:14,fontWeight:800,color:GRIS_DARK}}>{prov}</span>
+                    <span style={{fontSize:16,fontWeight:900,color:ROSA}}>{fmtMXN(+p.monto.toFixed(2))}</span>
+                  </div>
+                  <div style={{fontSize:11,color:GRIS_TEXT,marginTop:2}}>
+                    {fmtFechaCorta(p.desde)}{p.hasta!==p.desde?` al ${fmtFechaCorta(p.hasta)}`:""} · {p.cajas} caja{p.cajas!==1?"s":""}{p.tipos.size?` (${[...p.tipos].join(", ")})`:""} · {+p.kg.toFixed(2)} kg
+                    {p.kg>0&&p.monto>0?` · ${fmtMXN(+(p.monto/p.kg).toFixed(2))}/kg`:""}
+                    {p.cortesia>0?` · ${p.cortesia} de cortesía`:""}
+                    {p.vence?` · se paga ${fmtFechaCorta(p.vence)}`:""}
+                  </div>
+                  {corteForm?.prov===prov?(
+                    <div style={{background:VERDE_BG,borderRadius:12,padding:12,marginTop:8,border:"1.5px solid #A5D6A7"}}>
+                      <FL>Fecha de pago</FL>
+                      <input type="date" style={S.input} value={corteForm.fecha} onChange={e=>setCorteForm(f=>({...f,fecha:e.target.value}))}/>
+                      <FL>¿Cómo se pagó?</FL>
+                      <div style={S.chipRow}>{FORMA_OPTS.map(o=><Chip key={o} active={corteForm.forma===o} color={VERDE} onClick={()=>setCorteForm(f=>({...f,forma:o}))}>{o}</Chip>)}</div>
+                      <div style={{display:"flex",gap:8,marginTop:10}}>
+                        <button onClick={()=>setCorteForm(null)} style={{flex:1,...S.btnSec,marginTop:0,padding:"10px 0"}}>Cancelar</button>
+                        <button onClick={liquidarCorte} style={{flex:2,...S.btnPri,marginTop:0,padding:"10px 0",background:VERDE}}>✅ Liquidar {fmtMXN(+p.monto.toFixed(2))}</button>
+                      </div>
+                    </div>
+                  ):(
+                    <button onClick={()=>setCorteForm({prov,ids:p.ids,fecha:todayISO(),forma:"Transfer Santander"})}
+                      style={{...S.actionBtn,marginTop:8,width:"100%",color:VERDE,borderColor:VERDE,background:VERDE_BG,fontSize:12}}>
+                      ✅ Liquidar corte de {prov}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {vencidos.length>0&&(
           <div style={{...S.alertaBanner,marginBottom:12}}>
