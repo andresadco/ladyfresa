@@ -200,7 +200,7 @@ const RFORM0={fecha_recoleccion:todayISO(),quien:"",nota:"",selDias:[],monto_fis
 const PROVEEDORES_FRESA=[
   {nombre:"Fresa Méx",caja:null},            // Ricardo — cajas de 4 o 6 kg según precio
   {nombre:"Susana Sanvicente",caja:"7"},     // Factura a Groventia — cajas de 7 kg, retiene ISR 1.25%
-  {nombre:"Dayma",caja:null},                // Proveedor nuevo (nov 2026) — tamaño de caja a elegir en cada compra
+  {nombre:"Dayma",caja:"4"},                 // Proveedor nuevo (nov 2026) — canasta de 4 kg
 ];
 const TIPOS_CAJA=["4","6","7"];
 // Nombre del proveedor para el corte semanal ("Compra de fresa" sin proveedor = Fresa Méx, el de siempre)
