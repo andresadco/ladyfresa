@@ -202,7 +202,7 @@ const PROVEEDORES_FRESA=[
   {nombre:"Susana Sanvicente",caja:"7"},     // Factura a Groventia — cajas de 7 kg, retiene ISR 1.25%
   {nombre:"Dayma",caja:"4"},                 // Proveedor nuevo (nov 2026) — canasta de 4 kg
 ];
-const TIPOS_CAJA=["4","6","7"];
+const TIPOS_CAJA=["4","5","6","7"];
 // Nombre del proveedor para el corte semanal ("Compra de fresa" sin proveedor = Fresa Méx, el de siempre)
 const provCorte=(concepto)=>{
   const c=(concepto||"").trim();
@@ -484,7 +484,7 @@ export default function App(){
   });
 
   // ── COMPRA DE FRESA ───────────────────────────────────────────────────────
-  const KG_CAJA={"6":6,"4":4,"7":7};
+  const KG_CAJA={"6":6,"4":4,"5":5,"7":7};
   const cajasLinea=(l)=>Object.values(l.cajas||{}).reduce((s,n)=>s+(parseInt(n)||0),0);
   const totalLinea=(l)=>l.cortesia?0:cajasLinea(l)*num(l.precio);
   const kgLinea=(l)=>cajasLinea(l)*(KG_CAJA[l.tipo]||0);
